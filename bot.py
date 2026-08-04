@@ -447,8 +447,8 @@ def format_date(date_str):
         months = {1:'января',2:'февраля',3:'марта',4:'апреля',5:'мая',6:'июня',
                   7:'июля',8:'августа',9:'сентября',10:'октября',11:'ноября',12:'декабря'}
         return f"{d.day} {months[d.month]} {d.year if d.year!=today.year else ''}".strip()
-    except:
-        return date_str
+   except ValueError:
+    return date_str
 
 # ========== ПОВТОРЯЮЩИЕСЯ ЗАДАЧИ ==========
 def add_recurring_task(user_id, task_text, recurrence_type, recurrence_days, reminder_time, remind_before, start_date, end_date=None):
@@ -482,11 +482,11 @@ def generate_recurring_tasks_for_user(user_id, recurring_id=None):
         (task_id, user_id_db, task_text, recurrence_type, recurrence_days_json,
          reminder_time, remind_before, start_date_str, end_date_str, is_active, created_at) = task
         if user_id != user_id_db:
-            continue
+            break
         try:
             recurrence_days = json.loads(recurrence_days_json)
-        except:
-            recurrence_days = []
+        except (json.JSONDecodeError, TypeError):
+    recurrence_days = []
         start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
         end_date = None
         if end_date_str:
@@ -863,8 +863,8 @@ def send_activity_report(target_user_id=None):
         for admin in ADMIN_IDS:
             try:
                 bot.send_message(admin, text, parse_mode='HTML')
-            except:
-                pass
+           except Exception as e:
+    logger.error(f"Не удалось отправить отчёт админу {admin}: {e}")
 
 def send_detailed_activity_report(target_user_id):
     conn = sqlite3.connect('tasks.db')
@@ -970,7 +970,8 @@ def show_day_tasks(user_id, date_str, edit_message_id=None):
     if edit_message_id:
         try:
             bot.edit_message_text(text, user_id, edit_message_id, parse_mode='HTML', reply_markup=markup)
-        except:
+        except Exception as e:
+            logger.error(f"Ошибка при изменении сообщения: {e}")
             bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)
     else:
         bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)
@@ -1015,7 +1016,8 @@ def show_task_details(user_id, task_id, message_id=None):
     if message_id:
         try:
             bot.edit_message_text(full_text, user_id, message_id, parse_mode='HTML', reply_markup=markup)
-        except:
+     except Exception as e:
+logger.error(f"Ошибка при изменении сообщения: {e}")
             bot.send_message(user_id, full_text, parse_mode='HTML', reply_markup=markup)
     else:
         bot.send_message(user_id, full_text, parse_mode='HTML', reply_markup=markup)
@@ -1504,8 +1506,8 @@ def callback_handler(call):
                     user_id, msg_id,
                     reply_markup=create_days_of_week_keyboard(selected_days)
                 )
-            except:
-                pass
+            except Exception as e:
+    logger.error(f"Не удалось обновить выбор дней недели: {e}")
         bot.answer_callback_query(call.id)
 
     elif data == 'weekdays_done':
