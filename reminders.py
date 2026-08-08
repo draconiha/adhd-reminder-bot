@@ -59,6 +59,8 @@ def check_reminders(bot, logger):
                                 text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез 2 часа ({reminder_time})"
                             elif remind_before == 1440:
                                 text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЗавтра в {reminder_time}"
+                            else:
+                                text = f"⏰ <b>Скоро дело!**\n\n{task_text}\n\nЧерез {remind_before} минут ({reminder_time})"
                         else:
                             text = f"⏰ <b>Пора делать!</b>\n\n{task_text}\n\nСейчас время: {reminder_time}"
 
