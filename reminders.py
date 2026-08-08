@@ -60,7 +60,7 @@ def check_reminders(bot, logger):
                             elif remind_before == 1440:
                                 text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЗавтра в {reminder_time}"
                             else:
-                                text = f"⏰ <b>Скоро дело!**\n\n{task_text}\n\nЧерез {remind_before} минут ({reminder_time})"
+                                text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез {remind_before} минут ({reminder_time})"
                         else:
                             text = f"⏰ <b>Пора делать!</b>\n\n{task_text}\n\nСейчас время: {reminder_time}"
 
@@ -84,7 +84,7 @@ def check_reminders(bot, logger):
             time.sleep(60)
 
 
-def reset_daily_reminders(bot, logger, generate_recurring_tasks_for_user):
+def reset_daily_reminders(logger, generate_recurring_tasks_for_user):
     while True:
         try:
             now = get_current_time()
