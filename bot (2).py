@@ -9,6 +9,7 @@ import re
 import logging
 import sys
 import os
+from zoneinfo import ZoneInfo
 
 # ========== ЗАГРУЗКА ТОКЕНА ИЗ КОНФИГА ==========
 try:
@@ -32,9 +33,8 @@ user_temp_data = {}
 
 # ========== ВРЕМЯ (В UTC) ==========
 def get_current_time():
-    """Возвращает текущее время по Москве (UTC+3) без предупреждений."""
-    # Московское время = UTC+3
-    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(hours=3)
+    """Возвращает текущее время по Москве."""
+    return datetime.datetime.now(ZoneInfo("Europe/Moscow"))
 
 # ========== ИНИЦИАЛИЗАЦИЯ БАЗЫ ==========
 def init_db():
