@@ -118,275 +118,6 @@ def add_missing_columns():
 init_db()
 add_missing_columns()
 
-# ========== ЛОГИРОВАНИЕ АКТИВНОСТИ ==========
-def log_user_activity(user_id, action, username=None, first_name=None):
-    conn = sqlite3.connect('tasks.db')
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO user_activity (user_id, username, first_name, action) VALUES (?, ?, ?, ?)",
-        (user_id, username, first_name, action)
-    )
-    conn.commit()
-    conn.close()
-    logger.info(f"Активность: user={user_id}, username={username}, name={first_name}, action={action}")
-
-# ========== НАСТРОЙКИ ПОЛЬЗОВАТЕЛЯ ==========
-def get_user_settings(user_id):
-    conn = sqlite3.connect('tasks.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT default_reminder_time, default_remind_before FROM user_settings WHERE user_id=?", (user_id,))
-    s = cursor.fetchone()
-    if not s:
-        cursor.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
-        conn.commit()
-        s = ('09:00', 0)
-    conn.close()
-    return {'default_reminder_time': s[0], 'default_remind_before': s[1]}
-
-def update_user_setting(user_id, setting_name, setting_value):
-    allowed_settings = ['default_reminder_time', 'default_remind_before', 'theme', 'auto_delete_done', 'notification_type']
-    if setting_name not in allowed_settings:
-        return
-    conn = sqlite3.connect('tasks.db')
-    cursor = conn.cursor()
-    cursor.execute(f"UPDATE user_settings SET {setting_name}=? WHERE user_id=?", (setting_value, user_id))
-    conn.commit()
-    conn.close()
-
-# ========== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ РАЗБИВКИ ДЛИННЫХ СООБЩЕНИЙ ==========
-def split_and_send(chat_id, text, parse_mode=None, reply_markup=None, max_len=3500):
-    """Разбивает длинное сообщение на части и отправляет их по очереди."""
-    if len(text) <= max_len:
-        bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
-        return
-    parts = []
-    while len(text) > max_len:
-        # Ищем последний перенос строки в пределах max_len
-        split_at = text.rfind('\n', 0, max_len)
-        if split_at == -1:
-            split_at = max_len
-        parts.append(text[:split_at])
-        text = text[split_at:].lstrip()
-    parts.append(text)
-    for i, part in enumerate(parts):
-        # reply_markup отправляем только с последней частью
-        markup = reply_markup if i == len(parts)-1 else None
-        bot.send_message(chat_id, part, parse_mode=parse_mode, reply_markup=markup)
-
-# ========== КЛАВИАТУРЫ ==========
-def create_main_keyboard():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add('📅 Календарь', '➕ Плюс дело', '📋 Что сегодня?', '⚙️ Настройки')
-    return markup
-
-def create_calendar_keyboard(user_id, year=None, month=None):
-    now = get_current_time()
-    if year is None: year = now.year
-    if month is None: month = now.month
-
-    markup = types.InlineKeyboardMarkup(row_width=7)
-    month_name = calendar.month_name[month]
-    header = f"{month_name} {year}"
-
-    prev_month = month - 1 if month > 1 else 12
-    prev_year = year if month > 1 else year - 1
-    next_month = month + 1 if month < 12 else 1
-    next_year = year if month < 12 else year + 1
-
-    markup.row(
-        types.InlineKeyboardButton("◀️", callback_data=f"calendar_{prev_year}_{prev_month}"),
-        types.InlineKeyboardButton(header, callback_data="calendar_current"),
-        types.InlineKeyboardButton("▶️", callback_data=f"calendar_{next_year}_{next_month}")
-    )
-
-    week_days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-    markup.row(*[types.InlineKeyboardButton(day, callback_data="ignore") for day in week_days])
-
-    cal = calendar.monthcalendar(year, month)
-    for week in cal:
-        row = []
-        for day in week:
-            if day == 0:
-                row.append(types.InlineKeyboardButton(" ", callback_data="ignore"))
-            else:
-                date_str = f"{year}-{month:02d}-{day:02d}"
-                has_tasks = len(get_tasks_by_date(user_id, date_str)) > 0
-                if year == now.year and month == now.month and day == now.day:
-                    text = f"[{day}] ●" if has_tasks else f"[{day}]"
-                else:
-                    text = f"{day} ●" if has_tasks else str(day)
-                row.append(types.InlineKeyboardButton(text, callback_data=f"day_{date_str}"))
-        markup.row(*row)
-
-    today = get_current_time()
-    markup.row(
-        types.InlineKeyboardButton("📅 Сегодня", callback_data=f"day_{today.strftime('%Y-%m-%d')}"),
-        types.InlineKeyboardButton("📋 Все делишки", callback_data="all_tasks")
-    )
-    return markup
-
-def create_settings_keyboard():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("⏰ Время по умолчанию", callback_data="setting_default_time"),
-        types.InlineKeyboardButton("⏱️ Напоминать заранее", callback_data="setting_default_before"),
-        types.InlineKeyboardButton("🔁 Управление повторяющимися", callback_data="setting_recurring"),
-        types.InlineKeyboardButton("📊 Статистика", callback_data="setting_stats"),
-        types.InlineKeyboardButton("🏠 В меню", callback_data="main_menu")
-    )
-    return markup
-
-def create_default_time_keyboard(user_id):
-    settings = get_user_settings(user_id)
-    default = settings['default_reminder_time']
-    times = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    for i in range(0, len(times), 3):
-        row = []
-        for t in times[i:i+3]:
-            emoji = "✅" if t == default else "🕘"
-            row.append(types.InlineKeyboardButton(f"{emoji} {t}", callback_data=f"dtime_{t}"))
-        markup.row(*row)
-    markup.row(types.InlineKeyboardButton("◀️ Назад", callback_data="back_settings"))
-    return markup
-
-def create_default_before_keyboard(user_id):
-    settings = get_user_settings(user_id)
-    default = settings['default_remind_before']
-    options = [("0", "Не напоминать"), ("5", "5 мин"), ("15", "15 мин"), ("30", "30 мин"), ("60", "1 час"), ("120", "2 часа"), ("1440", "За день")]
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    for value, text in options:
-        emoji = "✅" if int(value) == default else "⏱️"
-        markup.add(types.InlineKeyboardButton(f"{emoji}{text}", callback_data=f"dbefore_{value}"))
-    markup.row(types.InlineKeyboardButton("◀️ Назад", callback_data="back_settings"))
-    return markup
-
-def create_recurring_management_keyboard():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("📋 Список повторяющихся дел", callback_data="recurring_list"),
-        types.InlineKeyboardButton("🗑️ Удалить все", callback_data="recurring_delete_all_ask"),
-        types.InlineKeyboardButton("◀️ Назад", callback_data="back_settings")
-    )
-    return markup
-
-def create_recurring_keyboard():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("📅 Каждый день", callback_data="type_daily"),
-        types.InlineKeyboardButton("🏢 По будням", callback_data="type_weekdays"),
-        types.InlineKeyboardButton("🎉 По выходным", callback_data="type_weekends"),
-        types.InlineKeyboardButton("📆 Каждую неделю", callback_data="type_weekly"),
-        types.InlineKeyboardButton("🗓️ Каждый месяц", callback_data="type_monthly"),
-        types.InlineKeyboardButton("❌ Без повтора", callback_data="type_none"),
-        types.InlineKeyboardButton("◀️ Отмена", callback_data="type_cancel")
-    )
-    return markup
-
-def create_days_of_week_keyboard(selected_days=None):
-    if selected_days is None:
-        selected_days = []
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    days = [
-        ("Пн", "mon"), ("Вт", "tue"), ("Ср", "wed"),
-        ("Чт", "thu"), ("Пт", "fri"), ("Сб", "sat"), ("Вс", "sun")
-    ]
-    for day_name, day_code in days:
-        emoji = "✅" if day_code in selected_days else ""
-        markup.add(types.InlineKeyboardButton(f"{emoji}{day_name}", callback_data=f"weekday_{day_code}"))
-    markup.row(
-        types.InlineKeyboardButton("✅ Готово", callback_data="weekdays_done"),
-        types.InlineKeyboardButton("❌ Отмена", callback_data="type_cancel")
-    )
-    return markup
-
-def create_reminder_time_keyboard(user_id=None):
-    if user_id:
-        settings = get_user_settings(user_id)
-        default = settings['default_reminder_time']
-    else:
-        default = "09:00"
-    times = ["09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00","18:00","19:00","20:00","21:00","22:00","23:00"]
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    for i in range(0, len(times), 3):
-        row = []
-        for t in times[i:i+3]:
-            emoji = "⏰" if t == default else "🕘"
-            row.append(types.InlineKeyboardButton(f"{emoji} {t}", callback_data=f"time_{t}"))
-        markup.row(*row)
-    markup.row(
-        types.InlineKeyboardButton("❌ Без напоминания", callback_data="time_none"),
-        types.InlineKeyboardButton("◀️ Отмена", callback_data="time_cancel")
-    )
-    return markup
-
-def create_remind_before_keyboard(user_id=None):
-    if user_id:
-        settings = get_user_settings(user_id)
-        default = settings['default_remind_before']
-    else:
-        default = 0
-    options = [("5","5 мин"),("15","15 мин"),("30","30 мин"),("60","1 час"),("120","2 часа"),("1440","За день")]
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    for value, text in options:
-        emoji = "⏱️" if int(value) == default else ""
-        markup.add(types.InlineKeyboardButton(f"{emoji}{text}", callback_data=f"before_{value}"))
-    markup.add(
-        types.InlineKeyboardButton("❌ Не напоминать заранее", callback_data="before_none"),
-        types.InlineKeyboardButton("◀️ Отмена", callback_data="before_cancel")
-    )
-    return markup
-
-def create_stats_keyboard():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("📈 За сегодня", callback_data="stats_today"),
-        types.InlineKeyboardButton("📊 За неделю", callback_data="stats_week"),
-        types.InlineKeyboardButton("📉 За месяц", callback_data="stats_month"),
-        types.InlineKeyboardButton("📋 Все время", callback_data="stats_all"),
-        types.InlineKeyboardButton("◀️ Назад", callback_data="back_settings")
-    )
-    return markup
-
-def create_stats_choice_keyboard():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("📊 Краткая статистика", callback_data="admin_stats_short"),
-        types.InlineKeyboardButton("📋 Подробная статистика (с именами)", callback_data="admin_stats_detailed")
-    )
-    return markup
-
-def create_recurring_list_keyboard(tasks, page=0, tasks_per_page=5):
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    start_idx = page * tasks_per_page
-    end_idx = start_idx + tasks_per_page
-    current_tasks = tasks[start_idx:end_idx]
-    for task in current_tasks:
-        (task_id, task_text, recurrence_type, recurrence_days_json,
-         reminder_time, remind_before, start_date, end_date, is_active) = task
-        short_text = task_text[:30] + "..." if len(task_text) > 30 else task_text
-        markup.add(types.InlineKeyboardButton(f"🗑️ {short_text}", callback_data=f"delete_recurring_{task_id}"))
-    navigation_buttons = []
-    if page > 0:
-        navigation_buttons.append(types.InlineKeyboardButton("◀️ Назад", callback_data=f"recurring_page_{page-1}"))
-    if end_idx < len(tasks):
-        navigation_buttons.append(types.InlineKeyboardButton("Вперед ▶️", callback_data=f"recurring_page_{page+1}"))
-    if navigation_buttons:
-        markup.row(*navigation_buttons)
-    markup.row(
-        types.InlineKeyboardButton("🗑️ Удалить все", callback_data="recurring_delete_all_ask"),
-        types.InlineKeyboardButton("◀️ Назад к управлению", callback_data="recurring_manage")
-    )
-    return markup
-
-def create_confirm_delete_all_recurring_keyboard():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("✅ Да, удалить всё", callback_data="recurring_delete_all_confirm"),
-        types.InlineKeyboardButton("❌ Нет, оставить", callback_data="recurring_manage")
-    )
-    return markup
-
 # ========== РАБОТА С БАЗОЙ ==========
 def get_tasks_by_date(user_id, date_str):
     conn = sqlite3.connect('tasks.db')
@@ -448,8 +179,8 @@ def format_date(date_str):
         months = {1:'января',2:'февраля',3:'марта',4:'апреля',5:'мая',6:'июня',
                   7:'июля',8:'августа',9:'сентября',10:'октября',11:'ноября',12:'декабря'}
         return f"{d.day} {months[d.month]} {d.year if d.year!=today.year else ''}".strip()
-   except ValueError:
-    return date_str
+    except:
+        return date_str
 
 # ========== ПОВТОРЯЮЩИЕСЯ ЗАДАЧИ ==========
 def add_recurring_task(user_id, task_text, recurrence_type, recurrence_days, reminder_time, remind_before, start_date, end_date=None):
@@ -483,11 +214,12 @@ def generate_recurring_tasks_for_user(user_id, recurring_id=None):
         (task_id, user_id_db, task_text, recurrence_type, recurrence_days_json,
          reminder_time, remind_before, start_date_str, end_date_str, is_active, created_at) = task
         if user_id != user_id_db:
-            break
+            continue
         try:
             recurrence_days = json.loads(recurrence_days_json)
-        except (json.JSONDecodeError, TypeError):
-    recurrence_days = []
+        except Exception as e:
+            logger.error(f"Ошибка разбора дней повторяющейся задачи {task_id}: {e}")
+            recurrence_days = []
         start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
         end_date = None
         if end_date_str:
@@ -549,105 +281,6 @@ def delete_all_recurring_tasks(user_id):
     conn.commit()
     conn.close()
     return deleted_count
-
-# ========== НАПОМИНАНИЯ ==========
-def check_reminders():
-    while True:
-        try:
-            now = get_current_time()
-            current_date = now.strftime('%Y-%m-%d')
-            tomorrow_date = (now + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
-            current_time = now.strftime('%H:%M')
-
-            conn = sqlite3.connect('tasks.db')
-            cursor = conn.cursor()
-
-            # Задачи на сегодня
-            cursor.execute("""
-                SELECT id, user_id, task, reminder_time, remind_before
-                FROM tasks
-                WHERE date = ? AND is_done = 0 AND reminder_sent = 0
-                AND reminder_time IS NOT NULL AND reminder_time != 'None'
-            """, (current_date,))
-            tasks_today = cursor.fetchall()
-
-            # Задачи на завтра с remind_before = 1440 (за день)
-            cursor.execute("""
-                SELECT id, user_id, task, reminder_time, remind_before
-                FROM tasks
-                WHERE date = ? AND is_done = 0 AND reminder_sent = 0
-                AND remind_before = 1440
-                AND reminder_time IS NOT NULL AND reminder_time != 'None'
-            """, (tomorrow_date,))
-            tasks_tomorrow = cursor.fetchall()
-
-            tasks = tasks_today + tasks_tomorrow
-
-            for task_id, user_id, task_text, reminder_time, remind_before in tasks:
-                try:
-                    # Для задач на завтра время напоминания считается от сегодняшнего дня
-                    if remind_before == 1440:
-                        reminder_datetime = datetime.datetime.strptime(f"{current_date} {reminder_time}", "%Y-%m-%d %H:%M")
-                    else:
-                        reminder_datetime = datetime.datetime.strptime(f"{current_date} {reminder_time}", "%Y-%m-%d %H:%M")
-                        if remind_before > 0:
-                            reminder_datetime = reminder_datetime - datetime.timedelta(minutes=remind_before)
-
-                    if now >= reminder_datetime:
-                        if remind_before > 0:
-                            if remind_before < 60:
-                                text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез {remind_before} минут ({reminder_time})"
-                            elif remind_before == 60:
-                                text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез 1 час ({reminder_time})"
-                            elif remind_before == 120:
-                                text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез 2 часа ({reminder_time})"
-                            elif remind_before == 1440:
-                                text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЗавтра в {reminder_time}"
-                        else:
-                            text = f"⏰ <b>Пора делать!</b>\n\n{task_text}\n\nСейчас время: {reminder_time}"
-
-                        bot.send_message(user_id, text, parse_mode='HTML')
-                        logger.info(f"Отправлено уведомление для задачи {task_id} пользователю {user_id}")
-
-                        cursor.execute("UPDATE tasks SET reminder_sent = 1 WHERE id = ?", (task_id,))
-                        conn.commit()
-                except Exception as e:
-                    logger.error(f"Ошибка при обработке уведомления для задачи {task_id}: {e}")
-
-            conn.close()
-            time.sleep(30)
-        except Exception as e:
-            logger.error(f"Ошибка в системе уведомлений: {e}")
-            time.sleep(60)
-
-def reset_daily_reminders():
-    while True:
-        try:
-            now = get_current_time()
-            current_time = now.strftime('%H:%M')
-            today_str = now.strftime('%Y-%m-%d')
-
-            if current_time == '00:00':
-                conn = sqlite3.connect('tasks.db')
-                cursor = conn.cursor()
-
-                # Сбрасываем reminder_sent только для задач на сегодня
-                cursor.execute("UPDATE tasks SET reminder_sent = 0 WHERE date = ?", (today_str,))
-                conn.commit()
-
-                # Генерируем повторяющиеся задачи на новый день
-                cursor.execute("SELECT DISTINCT user_id FROM recurring_tasks WHERE is_active = 1")
-                users = cursor.fetchall()
-                for (uid,) in users:
-                    generate_recurring_tasks_for_user(uid)
-                conn.close()
-                logger.info("Сброшены статусы уведомлений и сгенерированы повторяющиеся задачи")
-                time.sleep(60)
-            else:
-                time.sleep(30)
-        except Exception as e:
-            logger.error(f"Ошибка в функции сброса уведомлений: {e}")
-            time.sleep(60)
 
 # ========== СТАТИСТИКА ПОЛЬЗОВАТЕЛЯ ==========
 def show_user_stats(user_id, message_id=None):
@@ -864,8 +497,8 @@ def send_activity_report(target_user_id=None):
         for admin in ADMIN_IDS:
             try:
                 bot.send_message(admin, text, parse_mode='HTML')
-           except Exception as e:
-    logger.error(f"Не удалось отправить отчёт админу {admin}: {e}")
+            except Exception as e:
+                logger.error(f"Ошибка отправки отчёта админу {admin}: {e}")
 
 def send_detailed_activity_report(target_user_id):
     conn = sqlite3.connect('tasks.db')
@@ -889,7 +522,6 @@ def send_detailed_activity_report(target_user_id):
         for uid, uname, fname, act, ts in users:
             name_part = f"{fname or ''} (@{uname})" if uname else (fname or "без имени")
             text += f"• <b>{uid}</b> — {name_part}\n  Последнее действие: {act} ({ts})\n\n"
-    # Разбиваем, если очень длинный
     split_and_send(target_user_id, text, parse_mode='HTML')
 
 def send_users_with_tasks(admin_id):
@@ -972,7 +604,7 @@ def show_day_tasks(user_id, date_str, edit_message_id=None):
         try:
             bot.edit_message_text(text, user_id, edit_message_id, parse_mode='HTML', reply_markup=markup)
         except Exception as e:
-            logger.error(f"Ошибка при изменении сообщения: {e}")
+            logger.error(f"Ошибка обновления списка задач: {e}")
             bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)
     else:
         bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)
@@ -1017,8 +649,8 @@ def show_task_details(user_id, task_id, message_id=None):
     if message_id:
         try:
             bot.edit_message_text(full_text, user_id, message_id, parse_mode='HTML', reply_markup=markup)
-     except Exception as e:
-logger.error(f"Ошибка при изменении сообщения: {e}")
+        except Exception as e:
+            logger.error(f"Ошибка открытия задачи {task_id}: {e}")
             bot.send_message(user_id, full_text, parse_mode='HTML', reply_markup=markup)
     else:
         bot.send_message(user_id, full_text, parse_mode='HTML', reply_markup=markup)
@@ -1178,34 +810,18 @@ def handle_message(message):
         bot.send_message(user_id, f"✅ Добавил на сегодня!\n📝 <b>{text}</b>\nНа какое время?", parse_mode='HTML',
                          reply_markup=create_reminder_time_keyboard(user_id))
 
-# ========== ОБРАБОТЧИКИ CALLBACK ==========
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
-    user_id = call.message.chat.id
-    msg_id = call.message.message_id
+    user_id = call.from_user.id
     data = call.data
+    msg_id = call.message.message_id
 
-    # Админские кнопки статистики
-    if data == 'admin_stats_short':
-        if user_id in ADMIN_IDS:
-            send_activity_report(target_user_id=user_id)
-        bot.answer_callback_query(call.id)
-        return
-    if data == 'admin_stats_detailed':
-        if user_id in ADMIN_IDS:
-            send_detailed_activity_report(user_id)
-        bot.answer_callback_query(call.id)
-        return
-
-    # Календарь
+    # ========== КАЛЕНДАРЬ ==========
     if data.startswith('calendar_'):
-        if data == 'calendar_current':
-            bot.edit_message_reply_markup(user_id, msg_id, reply_markup=create_calendar_keyboard(user_id))
-        else:
-            parts = data.split('_')
-            if len(parts) == 3:
-                y, m = int(parts[1]), int(parts[2])
-                bot.edit_message_reply_markup(user_id, msg_id, reply_markup=create_calendar_keyboard(user_id, y, m))
+        parts = data.split('_')
+        year = int(parts[1])
+        month = int(parts[2])
+        show_calendar(user_id, msg_id)
         bot.answer_callback_query(call.id)
 
     elif data.startswith('day_'):
@@ -1213,237 +829,97 @@ def callback_handler(call):
         show_day_tasks(user_id, date, msg_id)
         bot.answer_callback_query(call.id)
 
-    elif data.startswith('task_'):
-        tid = int(data.replace('task_', ''))
-        show_task_details(user_id, tid, msg_id)
-        bot.answer_callback_query(call.id)
-
     elif data.startswith('add_'):
         date = data.replace('add_', '')
         user_states[user_id] = {'action': 'add_with_date', 'date': date}
-        bot.send_message(user_id, f"Что нужно сделать {format_date(date)}?")
+        bot.send_message(user_id, f"Напиши, что нужно сделать {format_date(date)}:")
+        bot.answer_callback_query(call.id)
+
+    elif data.startswith('task_'):
+        task_id = int(data.replace('task_', ''))
+        show_task_details(user_id, task_id, msg_id)
         bot.answer_callback_query(call.id)
 
     elif data.startswith('done_'):
-        tid = int(data.replace('done_', ''))
-        mark_task_done(tid, user_id)
-        task = get_task_by_id(tid)
+        task_id = int(data.replace('done_', ''))
+        mark_task_done(task_id, user_id)
+        task = get_task_by_id(task_id)
         if task:
-            _, _, date, _, _, _ = task
-            show_day_tasks(user_id, date, msg_id)
-        bot.answer_callback_query(call.id, "✅ Готово!")
+            show_day_tasks(user_id, task[2], msg_id)
+        bot.answer_callback_query(call.id, "Выполнено! 🎉")
 
     elif data.startswith('delete_one_'):
-        tid = int(data.replace('delete_one_', ''))
-        task = get_task_by_id(tid)
+        task_id = int(data.replace('delete_one_', ''))
+        task = get_task_by_id(task_id)
         if task:
-            _, _, date, _, _, _ = task
-            delete_task(tid, user_id)
-            show_day_tasks(user_id, date, msg_id)
-        bot.answer_callback_query(call.id, "🗑️ Удалено!")
-
-    elif data.startswith('move_'):
-        tid = int(data.replace('move_', ''))
-        user_temp_data[user_id] = {'move_task_id': tid}
-        bot.send_message(user_id, "📅 Выбери новую дату:", reply_markup=create_calendar_keyboard(user_id))
-        bot.answer_callback_query(call.id)
+            delete_task(task_id, user_id)
+            show_day_tasks(user_id, task[2], msg_id)
+        bot.answer_callback_query(call.id, "Удалено")
 
     elif data.startswith('clear_ask_'):
         date = data.replace('clear_ask_', '')
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("✅ Да, удалить всё", callback_data=f"clear_confirm_{date}"),
-            types.InlineKeyboardButton("❌ Нет", callback_data=f"day_{date}")
-        )
-        bot.edit_message_text(f"⚠️ Удалить все дела на {format_date(date)}?", user_id, msg_id, reply_markup=markup)
+        bot.edit_message_text(f"⚠️ Удалить все дела на {format_date(date)}?", user_id, msg_id,
+                              reply_markup=create_confirm_clear_keyboard(date))
         bot.answer_callback_query(call.id)
 
     elif data.startswith('clear_confirm_'):
         date = data.replace('clear_confirm_', '')
         clear_day(user_id, date)
-        bot.send_message(user_id, f"✅ Все дела на {format_date(date)} удалены!", reply_markup=create_main_keyboard())
-        bot.answer_callback_query(call.id)
+        show_day_tasks(user_id, date, msg_id)
+        bot.answer_callback_query(call.id, "День очищен")
 
     elif data == 'back_calendar':
         show_calendar(user_id, msg_id)
         bot.answer_callback_query(call.id)
 
     elif data == 'main_menu':
-        bot.send_message(user_id, "Главное меню:", reply_markup=create_main_keyboard())
+        bot.edit_message_text("🏠 <b>Главное меню</b>", user_id, msg_id,
+                              parse_mode='HTML', reply_markup=create_main_keyboard())
         bot.answer_callback_query(call.id)
 
-    elif data == 'all_tasks':
-        conn = sqlite3.connect('tasks.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT date, task, is_done, reminder_time, remind_before FROM tasks WHERE user_id=? ORDER BY date, reminder_time", (user_id,))
-        tasks = cursor.fetchall()
-        conn.close()
-        if not tasks:
-            bot.send_message(user_id, "📭 Пока пусто!", reply_markup=create_main_keyboard())
-        else:
-            by_date = {}
-            for date_str, task, done, rtime, rbefore in tasks:
-                by_date.setdefault(date_str, []).append((task, done, rtime, rbefore))
-            msg = "📋 <b>Все твои делишки:</b>\n\n"
-            for date_str in sorted(by_date.keys()):
-                formatted = format_date(date_str)
-                msg += f"<b>{formatted}:</b>\n"
-                for task, done, rtime, rbefore in by_date[date_str]:
-                    if done:
-                        msg += f"  <s>{task}</s> ✅\n"
-                    else:
-                        time_info = f" ({rtime})" if rtime and rtime != 'None' else ""
-                        if rbefore:
-                            if rbefore < 60:
-                                time_info += f" ⏰ за {rbefore} мин"
-                            elif rbefore == 60:
-                                time_info += " ⏰ за 1 час"
-                            elif rbefore == 120:
-                                time_info += " ⏰ за 2 часа"
-                            elif rbefore == 1440:
-                                time_info += " ⏰ за день"
-                        msg += f"  • {task}{time_info}\n"
-                msg += "\n"
-            # Используем разбивку для длинных сообщений
-            split_and_send(user_id, msg, parse_mode='HTML', reply_markup=create_main_keyboard())
-        bot.answer_callback_query(call.id)
+    # ========== НАПОМИНАНИЯ ==========
+    elif data.startswith('remind_'):
+        try:
+            parts = data.split('_')
+            if len(parts) >= 2:
+                remind_before = int(parts[1])
+                if user_id not in user_temp_data:
+                    bot.answer_callback_query(call.id, "❌ Ошибка: данные не найдены")
+                    return
+                temp = user_temp_data[user_id]
+                temp['remind_before'] = remind_before
+                action = temp.get('action')
+                if action == 'set_task_time':
+                    add_task_to_db(user_id, temp['task_text'], temp['date'], temp.get('reminder_time', '09:00'), remind_before)
+                    del user_temp_data[user_id]
+                    bot.send_message(user_id, "✅ Дело добавлено!", reply_markup=create_main_keyboard())
+                elif action == 'set_recurring_time':
+                    add_recurring_task(user_id, temp['task_text'], temp['recurrence_type'], temp.get('recurrence_days', []), temp.get('reminder_time', '09:00'), remind_before, temp['date'])
+                    del user_temp_data[user_id]
+                    bot.send_message(user_id, "🔄 Повторяющееся дело добавлено!", reply_markup=create_main_keyboard())
+                else:
+                    bot.answer_callback_query(call.id, "❌ Ошибка состояния")
+                    return
+                bot.answer_callback_query(call.id)
+            else:
+                bot.answer_callback_query(call.id, "❌ Неверный формат")
+        except Exception as e:
+            logger.error(f"Ошибка обработки напоминания: {e}")
+            bot.answer_callback_query(call.id, "❌ Ошибка")
 
-    # --- НАСТРОЙКИ ---
-    elif data == 'setting_default_time':
-        bot.edit_message_text("⏰ Выбери время по умолчанию:", user_id, msg_id,
-                              reply_markup=create_default_time_keyboard(user_id))
-        bot.answer_callback_query(call.id)
-
-    elif data == 'setting_default_before':
-        bot.edit_message_text("⏱️ Напомнить заранее:", user_id, msg_id,
-                              reply_markup=create_default_before_keyboard(user_id))
-        bot.answer_callback_query(call.id)
-
-    elif data == 'setting_recurring':
-        bot.edit_message_text("🔁 Управление повторяющимися делами:", user_id, msg_id,
-                              reply_markup=create_recurring_management_keyboard())
-        bot.answer_callback_query(call.id)
-
-    elif data == 'setting_stats':
-        show_user_stats(user_id, msg_id)
-        bot.answer_callback_query(call.id)
-
-    elif data.startswith('dtime_'):
-        if data == 'dtime_back_settings':
-            settings = get_user_settings(user_id)
-            bot.edit_message_text(
-                f"⚙️ Твои настройки:\n⏰ Время по умолчанию: {settings['default_reminder_time']}\n⏱️ Напоминать заранее: {settings['default_remind_before']} мин",
-                user_id, msg_id, reply_markup=create_settings_keyboard())
-            bot.answer_callback_query(call.id)
-            return
-        time_val = data.replace('dtime_', '')
-        update_user_setting(user_id, 'default_reminder_time', time_val)
-        settings = get_user_settings(user_id)
-        bot.edit_message_text(
-            f"⚙️ Твои настройки:\n⏰ Время по умолчанию: {settings['default_reminder_time']}\n⏱️ Напоминать заранее: {settings['default_remind_before']} мин",
-            user_id, msg_id, reply_markup=create_settings_keyboard())
-        bot.answer_callback_query(call.id, f"✅ Время по умолчанию: {time_val}")
-
-    elif data.startswith('dbefore_'):
-        if data == 'dbefore_back_settings':
-            settings = get_user_settings(user_id)
-            bot.edit_message_text(
-                f"⚙️ Твои настройки:\n⏰ Время по умолчанию: {settings['default_reminder_time']}\n⏱️ Напоминать заранее: {settings['default_remind_before']} мин",
-                user_id, msg_id, reply_markup=create_settings_keyboard())
-            bot.answer_callback_query(call.id)
-            return
-        before_val = int(data.replace('dbefore_', ''))
-        update_user_setting(user_id, 'default_remind_before', before_val)
-        settings = get_user_settings(user_id)
-        bot.edit_message_text(
-            f"⚙️ Твои настройки:\n⏰ Время по умолчанию: {settings['default_reminder_time']}\n⏱️ Напоминать заранее: {settings['default_remind_before']} мин",
-            user_id, msg_id, reply_markup=create_settings_keyboard())
-        bot.answer_callback_query(call.id, f"✅ Напоминать заранее изменено")
-
-    elif data == 'back_settings':
-        settings = get_user_settings(user_id)
-        bot.edit_message_text(
-            f"⚙️ Твои настройки:\n⏰ Время по умолчанию: {settings['default_reminder_time']}\n⏱️ Напоминать заранее: {settings['default_remind_before']} мин",
-            user_id, msg_id, reply_markup=create_settings_keyboard())
-        bot.answer_callback_query(call.id)
-
-    elif data.startswith('stats_'):
-        if data == 'stats_today':
-            show_today_stats(user_id, msg_id)
-        elif data == 'stats_week':
-            show_week_stats(user_id, msg_id)
-        elif data == 'stats_month':
-            show_month_stats(user_id, msg_id)
-        elif data == 'stats_all':
-            show_user_stats(user_id, msg_id)
-        bot.answer_callback_query(call.id)
-
-    # --- ДОБАВЛЕНИЕ ВРЕМЕНИ ---
     elif data.startswith('time_'):
-        time_val = data.replace('time_', '')
-        if time_val == 'cancel':
-            if user_id in user_temp_data:
-                del user_temp_data[user_id]
-            bot.send_message(user_id, "❌ Отменено", reply_markup=create_main_keyboard())
-            bot.answer_callback_query(call.id)
-            return
+        time_value = data.replace('time_', '')
         if user_id not in user_temp_data:
-            bot.answer_callback_query(call.id)
+            bot.answer_callback_query(call.id, "❌ Ошибка: данные не найдены")
             return
         temp = user_temp_data[user_id]
-        if time_val == 'none':
-            time_val = None
-        temp['reminder_time'] = time_val
+        temp['reminder_time'] = time_value
         if temp.get('action') == 'set_task_time':
-            temp['action'] = 'set_remind_before'
-            bot.send_message(user_id, f"⏰ Время: {time_val if time_val else 'без напоминания'}\nНапомнить заранее?",
-                             reply_markup=create_remind_before_keyboard(user_id))
+            bot.edit_message_text(f"📝 <b>{temp['task_text']}</b>\n\nВремя: {time_value}\n\nЗа сколько напомнить?",
+                                  user_id, msg_id, parse_mode='HTML', reply_markup=create_reminder_before_keyboard(user_id))
         elif temp.get('action') == 'set_recurring_time':
-            temp['action'] = 'set_recurring_remind_before'
-            bot.send_message(user_id, f"⏰ Время: {time_val if time_val else 'без напоминания'}\nНапомнить заранее?",
-                             reply_markup=create_remind_before_keyboard(user_id))
-        else:
-            add_task_to_db(user_id, temp['task_text'], temp['date'], time_val, 0)
-            bot.send_message(user_id, f"✅ Задача добавлена на {format_date(temp['date'])}!",
-                             reply_markup=create_main_keyboard())
-            del user_temp_data[user_id]
-        bot.answer_callback_query(call.id)
-
-    elif data.startswith('before_'):
-        choice = data.replace('before_', '')
-        if choice == 'cancel':
-            if user_id in user_temp_data:
-                del user_temp_data[user_id]
-            bot.send_message(user_id, "❌ Отменено", reply_markup=create_main_keyboard())
-            bot.answer_callback_query(call.id)
-            return
-        if user_id not in user_temp_data:
-            bot.answer_callback_query(call.id)
-            return
-        temp = user_temp_data[user_id]
-        before = 0
-        if choice == 'none':
-            before = 0
-        elif choice == '5': before = 5
-        elif choice == '15': before = 15
-        elif choice == '30': before = 30
-        elif choice == '60': before = 60
-        elif choice == '120': before = 120
-        elif choice == '1440': before = 1440
-        else: before = 0
-
-        if temp.get('action') == 'set_remind_before':
-            add_task_to_db(user_id, temp['task_text'], temp['date'], temp['reminder_time'], before)
-            bot.send_message(user_id, f"✅ Задача добавлена на {format_date(temp['date'])}!",
-                             reply_markup=create_main_keyboard())
-            del user_temp_data[user_id]
-        elif temp.get('action') == 'set_recurring_remind_before':
-            add_recurring_task(user_id, temp['task_text'], temp['recurrence_type'],
-                               temp.get('recurrence_days', []), temp['reminder_time'],
-                               before, temp['date'])
-            bot.send_message(user_id, f"✅ Повторяющаяся задача создана!",
-                             reply_markup=create_main_keyboard())
-            del user_temp_data[user_id]
+            bot.edit_message_text(f"🔄 <b>{temp['task_text']}</b>\n\nВремя: {time_value}\n\nЗа сколько напомнить?",
+                                  user_id, msg_id, parse_mode='HTML', reply_markup=create_reminder_before_keyboard(user_id))
         bot.answer_callback_query(call.id)
 
     # --- ПОВТОРЯЮЩИЕСЯ ---
@@ -1508,7 +984,7 @@ def callback_handler(call):
                     reply_markup=create_days_of_week_keyboard(selected_days)
                 )
             except Exception as e:
-    logger.error(f"Не удалось обновить выбор дней недели: {e}")
+                logger.error(f"Ошибка обновления выбора дней недели: {e}")
         bot.answer_callback_query(call.id)
 
     elif data == 'weekdays_done':
@@ -1584,16 +1060,16 @@ if __name__ == "__main__":
 
     # Потоки для напоминаний
     reminder_thread = threading.Thread(
-    target=check_reminders,
-    args=(bot, logger)
-)
+        target=check_reminders,
+        args=(bot, logger)
+    )
     reminder_thread.daemon = True
     reminder_thread.start()
 
     reset_thread = threading.Thread(
-    target=reset_daily_reminders,
-    args=(bot, logger, generate_recurring_tasks_for_user)
-)
+        target=reset_daily_reminders,
+        args=(logger, generate_recurring_tasks_for_user)
+    )
     reset_thread.daemon = True
     reset_thread.start()
 
