@@ -1583,11 +1583,17 @@ if __name__ == "__main__":
     logger.info("🤖 СДВГ-напоминалка запущена!")
 
     # Потоки для напоминаний
-    reminder_thread = threading.Thread(target=check_reminders)
+    reminder_thread = threading.Thread(
+    target=check_reminders,
+    args=(bot, logger)
+)
     reminder_thread.daemon = True
     reminder_thread.start()
 
-    reset_thread = threading.Thread(target=reset_daily_reminders)
+    reset_thread = threading.Thread(
+    target=reset_daily_reminders,
+    args=(bot, logger, generate_recurring_tasks_for_user)
+)
     reset_thread.daemon = True
     reset_thread.start()
 
