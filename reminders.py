@@ -2,12 +2,11 @@ import sqlite3
 import datetime
 import time
 import logging
-from zoneinfo import ZoneInfo
 
 
 def get_current_time():
-    """Возвращает текущее время по Москве."""
-    return datetime.datetime.now(ZoneInfo("Europe/Moscow"))
+    """Возвращает текущее время по Москве (UTC+3) без временной зоны."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(hours=3)
 
 
 def check_reminders(bot, logger):
