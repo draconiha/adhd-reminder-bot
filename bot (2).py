@@ -10,6 +10,7 @@ import logging
 import sys
 import os
 from zoneinfo import ZoneInfo
+from reminders import check_reminders, reset_daily_reminders
 
 # ========== ЗАГРУЗКА ТОКЕНА ИЗ КОНФИГА ==========
 try:
