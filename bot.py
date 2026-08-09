@@ -118,6 +118,276 @@ def add_missing_columns():
 init_db()
 add_missing_columns()
 
+# ========== ЛОГИРОВАНИЕ АКТИВНОСТИ ==========
+def log_user_activity(user_id, action, username=None, first_name=None):
+    conn = sqlite3.connect('tasks.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO user_activity (user_id, username, first_name, action) VALUES (?, ?, ?, ?)",
+        (user_id, username, first_name, action)
+    )
+    conn.commit()
+    conn.close()
+    logger.info(f"Активность: user={user_id}, username={username}, name={first_name}, action={action}")
+
+# ========== НАСТРОЙКИ ПОЛЬЗОВАТЕЛЯ ==========
+def get_user_settings(user_id):
+    conn = sqlite3.connect('tasks.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT default_reminder_time, default_remind_before FROM user_settings WHERE user_id=?", (user_id,))
+    s = cursor.fetchone()
+    if not s:
+        cursor.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+        s = ('09:00', 0)
+    conn.close()
+    return {'default_reminder_time': s[0], 'default_remind_before': s[1]}
+
+def update_user_setting(user_id, setting_name, setting_value):
+    allowed_settings = ['default_reminder_time', 'default_remind_before', 'theme', 'auto_delete_done', 'notification_type']
+    if setting_name not in allowed_settings:
+        return
+    conn = sqlite3.connect('tasks.db')
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE user_settings SET {setting_name}=? WHERE user_id=?", (setting_value, user_id))
+    conn.commit()
+    conn.close()
+
+# ========== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ РАЗБИВКИ ДЛИННЫХ СООБЩЕНИЙ ==========
+def split_and_send(chat_id, text, parse_mode=None, reply_markup=None, max_len=3500):
+    """Разбивает длинное сообщение на части и отправляет их по очереди."""
+    if len(text) <= max_len:
+        bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+        return
+    parts = []
+    while len(text) > max_len:
+        # Ищем последний перенос строки в пределах max_len
+        split_at = text.rfind('\n', 0, max_len)
+        if split_at == -1:
+            split_at = max_len
+        parts.append(text[:split_at])
+        text = text[split_at:].lstrip()
+    parts.append(text)
+    for i, part in enumerate(parts):
+        # reply_markup отправляем только с последней частью
+        markup = reply_markup if i == len(parts)-1 else None
+        bot.send_message(chat_id, part, parse_mode=parse_mode, reply_markup=markup)
+
+# ========== КЛАВИАТУРЫ ==========
+def create_main_keyboard():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add('📅 Календарь', '➕ Плюс дело', '📋 Что сегодня?', '⚙️ Настройки')
+    return markup
+
+def create_calendar_keyboard(user_id, year=None, month=None):
+    now = get_current_time()
+    if year is None: year = now.year
+    if month is None: month = now.month
+
+    markup = types.InlineKeyboardMarkup(row_width=7)
+    month_name = calendar.month_name[month]
+    header = f"{month_name} {year}"
+
+    prev_month = month - 1 if month > 1 else 12
+    prev_year = year if month > 1 else year - 1
+    next_month = month + 1 if month < 12 else 1
+    next_year = year if month < 12 else year + 1
+
+    markup.row(
+        types.InlineKeyboardButton("◀️", callback_data=f"calendar_{prev_year}_{prev_month}"),
+        types.InlineKeyboardButton(header, callback_data="calendar_current"),
+        types.InlineKeyboardButton("▶️", callback_data=f"calendar_{next_year}_{next_month}")
+    )
+
+    week_days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    markup.row(*[types.InlineKeyboardButton(day, callback_data="ignore") for day in week_days])
+
+    cal = calendar.monthcalendar(year, month)
+    for week in cal:
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(types.InlineKeyboardButton(" ", callback_data="ignore"))
+            else:
+                date_str = f"{year}-{month:02d}-{day:02d}"
+                has_tasks = len(get_tasks_by_date(user_id, date_str)) > 0
+                if year == now.year and month == now.month and day == now.day:
+                    text = f"[{day}] ●" if has_tasks else f"[{day}]"
+                else:
+                    text = f"{day} ●" if has_tasks else str(day)
+                row.append(types.InlineKeyboardButton(text, callback_data=f"day_{date_str}"))
+        markup.row(*row)
+
+    today = get_current_time()
+    markup.row(
+        types.InlineKeyboardButton("📅 Сегодня", callback_data=f"day_{today.strftime('%Y-%m-%d')}"),
+        types.InlineKeyboardButton("📋 Все делишки", callback_data="all_tasks")
+    )
+    return markup
+
+def create_settings_keyboard():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⏰ Время по умолчанию", callback_data="setting_default_time"),
+        types.InlineKeyboardButton("⏱️ Напоминать заранее", callback_data="setting_default_before"),
+        types.InlineKeyboardButton("🔁 Управление повторяющимися", callback_data="setting_recurring"),
+        types.InlineKeyboardButton("📊 Статистика", callback_data="setting_stats"),
+        types.InlineKeyboardButton("🏠 В меню", callback_data="main_menu")
+    )
+    return markup
+
+def create_default_time_keyboard(user_id):
+    settings = get_user_settings(user_id)
+    default = settings['default_reminder_time']
+    times = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    for i in range(0, len(times), 3):
+        row = []
+        for t in times[i:i+3]:
+            emoji = "✅" if t == default else "🕘"
+            row.append(types.InlineKeyboardButton(f"{emoji} {t}", callback_data=f"dtime_{t}"))
+        markup.row(*row)
+    markup.row(types.InlineKeyboardButton("◀️ Назад", callback_data="back_settings"))
+    return markup
+
+def create_default_before_keyboard(user_id):
+    settings = get_user_settings(user_id)
+    default = settings['default_remind_before']
+    options = [("0", "Не напоминать"), ("5", "5 мин"), ("15", "15 мин"), ("30", "30 мин"), ("60", "1 час"), ("120", "2 часа"), ("1440", "За день")]
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for value, text in options:
+        emoji = "✅" if int(value) == default else "⏱️"
+        markup.add(types.InlineKeyboardButton(f"{emoji}{text}", callback_data=f"dbefore_{value}"))
+    markup.row(types.InlineKeyboardButton("◀️ Назад", callback_data="back_settings"))
+    return markup
+
+def create_recurring_management_keyboard():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📋 Список повторяющихся дел", callback_data="recurring_list"),
+        types.InlineKeyboardButton("🗑️ Удалить все", callback_data="recurring_delete_all_ask"),
+        types.InlineKeyboardButton("◀️ Назад", callback_data="back_settings")
+    )
+    return markup
+
+def create_recurring_keyboard():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📅 Каждый день", callback_data="type_daily"),
+        types.InlineKeyboardButton("🏢 По будням", callback_data="type_weekdays"),
+        types.InlineKeyboardButton("🎉 По выходным", callback_data="type_weekends"),
+        types.InlineKeyboardButton("📆 Каждую неделю", callback_data="type_weekly"),
+        types.InlineKeyboardButton("🗓️ Каждый месяц", callback_data="type_monthly"),
+        types.InlineKeyboardButton("❌ Без повтора", callback_data="type_none"),
+        types.InlineKeyboardButton("◀️ Отмена", callback_data="type_cancel")
+    )
+    return markup
+
+def create_days_of_week_keyboard(selected_days=None):
+    if selected_days is None:
+        selected_days = []
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    days = [
+        ("Пн", "mon"), ("Вт", "tue"), ("Ср", "wed"),
+        ("Чт", "thu"), ("Пт", "fri"), ("Сб", "sat"), ("Вс", "sun")
+    ]
+    for day_name, day_code in days:
+        emoji = "✅" if day_code in selected_days else ""
+        markup.add(types.InlineKeyboardButton(f"{emoji}{day_name}", callback_data=f"weekday_{day_code}"))
+    markup.row(
+        types.InlineKeyboardButton("✅ Готово", callback_data="weekdays_done"),
+        types.InlineKeyboardButton("❌ Отмена", callback_data="type_cancel")
+    )
+    return markup
+
+def create_reminder_time_keyboard(user_id=None):
+    if user_id:
+        settings = get_user_settings(user_id)
+        default = settings['default_reminder_time']
+    else:
+        default = "09:00"
+    times = ["09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00","18:00","19:00","20:00","21:00","22:00","23:00"]
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    for i in range(0, len(times), 3):
+        row = []
+        for t in times[i:i+3]:
+            emoji = "⏰" if t == default else "🕘"
+            row.append(types.InlineKeyboardButton(f"{emoji} {t}", callback_data=f"time_{t}"))
+        markup.row(*row)
+    markup.row(
+        types.InlineKeyboardButton("❌ Без напоминания", callback_data="time_none"),
+        types.InlineKeyboardButton("◀️ Отмена", callback_data="time_cancel")
+    )
+    return markup
+
+def create_remind_before_keyboard(user_id=None):
+    if user_id:
+        settings = get_user_settings(user_id)
+        default = settings['default_remind_before']
+    else:
+        default = 0
+    options = [("5","5 мин"),("15","15 мин"),("30","30 мин"),("60","1 час"),("120","2 часа"),("1440","За день")]
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for value, text in options:
+        emoji = "⏱️" if int(value) == default else ""
+        markup.add(types.InlineKeyboardButton(f"{emoji}{text}", callback_data=f"before_{value}"))
+    markup.add(
+        types.InlineKeyboardButton("❌ Не напоминать заранее", callback_data="before_none"),
+        types.InlineKeyboardButton("◀️ Отмена", callback_data="before_cancel")
+    )
+    return markup
+
+def create_stats_keyboard():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📈 За сегодня", callback_data="stats_today"),
+        types.InlineKeyboardButton("📊 За неделю", callback_data="stats_week"),
+        types.InlineKeyboardButton("📉 За месяц", callback_data="stats_month"),
+        types.InlineKeyboardButton("📋 Все время", callback_data="stats_all"),
+        types.InlineKeyboardButton("◀️ Назад", callback_data="back_settings")
+    )
+    return markup
+
+def create_stats_choice_keyboard():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📊 Краткая статистика", callback_data="admin_stats_short"),
+        types.InlineKeyboardButton("📋 Подробная статистика (с именами)", callback_data="admin_stats_detailed")
+    )
+    return markup
+
+def create_recurring_list_keyboard(tasks, page=0, tasks_per_page=5):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    start_idx = page * tasks_per_page
+    end_idx = start_idx + tasks_per_page
+    current_tasks = tasks[start_idx:end_idx]
+    for task in current_tasks:
+        (task_id, task_text, recurrence_type, recurrence_days_json,
+         reminder_time, remind_before, start_date, end_date, is_active) = task
+        short_text = task_text[:30] + "..." if len(task_text) > 30 else task_text
+        markup.add(types.InlineKeyboardButton(f"🗑️ {short_text}", callback_data=f"delete_recurring_{task_id}"))
+    navigation_buttons = []
+    if page > 0:
+        navigation_buttons.append(types.InlineKeyboardButton("◀️ Назад", callback_data=f"recurring_page_{page-1}"))
+    if end_idx < len(tasks):
+        navigation_buttons.append(types.InlineKeyboardButton("Вперед ▶️", callback_data=f"recurring_page_{page+1}"))
+    if navigation_buttons:
+        markup.row(*navigation_buttons)
+    markup.row(
+        types.InlineKeyboardButton("🗑️ Удалить все", callback_data="recurring_delete_all_ask"),
+        types.InlineKeyboardButton("◀️ Назад к управлению", callback_data="recurring_manage")
+    )
+    return markup
+
+def create_confirm_delete_all_recurring_keyboard():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✅ Да, удалить всё", callback_data="recurring_delete_all_confirm"),
+        types.InlineKeyboardButton("❌ Нет, оставить", callback_data="recurring_manage")
+    )
+    return markup
+
+
 # ========== РАБОТА С БАЗОЙ ==========
 def get_tasks_by_date(user_id, date_str):
     conn = sqlite3.connect('tasks.db')
