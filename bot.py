@@ -1186,10 +1186,10 @@ def callback_handler(call):
         temp['reminder_time'] = time_value
         if temp.get('action') == 'set_task_time':
             bot.edit_message_text(f"📝 <b>{temp['task_text']}</b>\n\nВремя: {time_value}\n\nЗа сколько напомнить?",
-                                  user_id, msg_id, parse_mode='HTML', reply_markup=create_reminder_before_keyboard(user_id))
+                                  user_id, msg_id, parse_mode='HTML', reply_markup=create_remind_before_keyboard(user_id))
         elif temp.get('action') == 'set_recurring_time':
             bot.edit_message_text(f"🔄 <b>{temp['task_text']}</b>\n\nВремя: {time_value}\n\nЗа сколько напомнить?",
-                                  user_id, msg_id, parse_mode='HTML', reply_markup=create_reminder_before_keyboard(user_id))
+                                  user_id, msg_id, parse_mode='HTML', reply_markup=create_remind_before_keyboard(user_id))
         bot.answer_callback_query(call.id)
 
     # --- ПОВТОРЯЮЩИЕСЯ ---
