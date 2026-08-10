@@ -1148,7 +1148,7 @@ def callback_handler(call):
         bot.answer_callback_query(call.id)
 
     # ========== НАПОМИНАНИЯ ==========
-        elif data == 'before_none':
+    elif data == 'before_none':
         if user_id not in user_temp_data:
             bot.answer_callback_query(call.id, "❌ Ошибка: данные не найдены")
             return
@@ -1258,7 +1258,7 @@ def callback_handler(call):
             logger.error(f"Ошибка обработки напоминания: {e}")
             bot.answer_callback_query(call.id, "❌ Ошибка")
             
-       elif data == 'time_none':
+    elif data == 'time_none':
         if user_id in user_temp_data:
             temp = user_temp_data[user_id]
             temp['reminder_time'] = None
