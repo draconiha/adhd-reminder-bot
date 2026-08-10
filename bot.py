@@ -1148,35 +1148,80 @@ def callback_handler(call):
         bot.answer_callback_query(call.id)
 
     # ========== НАПОМИНАНИЯ ==========
-elif data.startswith('before_'):
-    try:
-        parts = data.split('_')
-        if len(parts) >= 2:
-            remind_before = int(parts[1])
+    elif data.startswith('before_'):
+        try:
+            parts = data.split('_')
+
+            if len(parts) >= 2:
+                remind_before = int(parts[1])
+
                 if user_id not in user_temp_data:
                     bot.answer_callback_query(call.id, "❌ Ошибка: данные не найдены")
                     return
+
                 temp = user_temp_data[user_id]
                 temp['remind_before'] = remind_before
                 action = temp.get('action')
-                if action == 'set_task_time':
-                    add_task_to_db(user_id, temp['task_text'], temp['date'], temp.get('reminder_time', '09:00'), remind_before)
-                    del user_temp_data[user_id]
-                    bot.send_message(user_id, "✅ Дело добавлено!", reply_markup=create_main_keyboard())
-                elif action == 'set_recurring_time':
-                    add_recurring_task(user_id, temp['task_text'], temp['recurrence_type'], temp.get('recurrence_days', []), temp.get('reminder_time', '09:00'), remind_before, temp['date'])
-                    del user_temp_data[user_id]
-                    bot.send_message(user_id, "🔄 Повторяющееся дело добавлено!", reply_markup=create_main_keyboard())
-                else:
-                    bot.answer_callback_query(call.id, "❌ Ошибка состояния")
-                    return
-                bot.answer_callback_query(call.id)
-            else:
-                bot.answer_callback_query(call.id, "❌ Неверный формат")
-        except Exception as e:
-            logger.error(f"Ошибка обработки напоминания: {e}")
-            bot.answer_callback_query(call.id, "❌ Ошибка")
 
+                if action == 'set_task_time':
+                    add_task_to_db(
+                        user_id,
+                        temp['task_text'],
+                        temp['date'],
+                        temp.get('reminder_time', '09:00'),
+                        remind_before
+                    )
+
+                    del user_temp_data[user_id]
+
+                    bot.send_message(
+                        user_id,
+                        "✅ Дело добавлено!",
+                        reply_markup=create_main_keyboard()
+                    )
+
+                elif action == 'set_recurring_time':
+                    add_recurring_task(
+                        user_id,
+                        temp['task_text'],
+                        temp['recurrence_type'],
+                        temp.get('recurrence_days', []),
+                        temp.get('reminder_time', '09:00'),
+                        remind_before,
+                        temp['date']
+                    )
+
+                    del user_temp_data[user_id]
+
+                    bot.send_message(
+                        user_id,
+                        "🔄 Повторяющееся дело добавлено!",
+                        reply_markup=create_main_keyboard()
+                    )
+
+                else:
+                    bot.answer_callback_query(
+                        call.id,
+                        "❌ Ошибка состояния"
+                    )
+                    return
+
+                bot.answer_callback_query(call.id)
+
+            else:
+                bot.answer_callback_query(
+                    call.id,
+                    "❌ Неверный формат"
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Ошибка обработки напоминания: {e}"
+            )
+            bot.answer_callback_query(
+                call.id,
+                "❌ Ошибка"
+            )
     elif data.startswith('time_'):
         time_value = data.replace('time_', '')
         if user_id not in user_temp_data:
