@@ -1069,7 +1069,7 @@ def handle_message(message):
         user_temp_data[user_id] = {'task_text': text, 'date': date, 'action': 'set_task_time'}
         del user_states[user_id]
         bot.send_message(user_id, f"📝 <b>{text}</b>\nНа какое время?", parse_mode='HTML',
-                         reply_markup=create_remind_time_keyboard(user_id))
+                         reply_markup=create_reminder_time_keyboard(user_id))
     elif user_id in user_temp_data and user_temp_data[user_id].get('action') == 'awaiting_recurring_text':
         user_temp_data[user_id]['task_text'] = text
         user_temp_data[user_id]['action'] = 'select_recurrence_type'
@@ -1078,7 +1078,7 @@ def handle_message(message):
         today = get_current_time().strftime('%Y-%m-%d')
         user_temp_data[user_id] = {'task_text': text, 'date': today, 'action': 'set_task_time'}
         bot.send_message(user_id, f"✅ Добавил на сегодня!\n📝 <b>{text}</b>\nНа какое время?", parse_mode='HTML',
-                         reply_markup=create_remind_time_keyboard(user_id))
+                         reply_markup=create_reminder_time_keyboard(user_id))
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
