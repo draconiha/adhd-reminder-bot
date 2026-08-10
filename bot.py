@@ -1148,11 +1148,11 @@ def callback_handler(call):
         bot.answer_callback_query(call.id)
 
     # ========== НАПОМИНАНИЯ ==========
-    elif data.startswith('remind_'):
-        try:
-            parts = data.split('_')
-            if len(parts) >= 2:
-                remind_before = int(parts[1])
+elif data.startswith('before_'):
+    try:
+        parts = data.split('_')
+        if len(parts) >= 2:
+            remind_before = int(parts[1])
                 if user_id not in user_temp_data:
                     bot.answer_callback_query(call.id, "❌ Ошибка: данные не найдены")
                     return
