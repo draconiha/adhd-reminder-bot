@@ -336,6 +336,19 @@ def create_remind_before_keyboard(user_id=None):
         types.InlineKeyboardButton("◀️ Отмена", callback_data="before_cancel")
     )
     return markup
+def create_confirm_clear_keyboard(date):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(
+            "✅ Да, удалить всё",
+            callback_data=f"clear_confirm_{date}"
+        ),
+        types.InlineKeyboardButton(
+            "❌ Нет",
+            callback_data=f"day_{date}"
+        )
+    )
+    return markup
 
 def create_stats_keyboard():
     markup = types.InlineKeyboardMarkup(row_width=2)
