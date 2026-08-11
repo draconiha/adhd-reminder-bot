@@ -876,7 +876,8 @@ def show_day_tasks(user_id, date_str, edit_message_id=None):
     markup.row(
         types.InlineKeyboardButton("➕ Плюс дело", callback_data=f"add_{date_str}"),
         types.InlineKeyboardButton("🔄 Повтор", callback_data=f"recur_{date_str}"),
-        types.InlineKeyboardButton("🗑️ Минус вайб", callback_data=f"clear_ask_{date_str}")
+        types.InlineKeyboardButton("🗑️ Минус вайб", callback_data=f"clear_ask_{date_str}"),
+        types.InlineKeyboardButton("📅 Перенести", callback_data=f"move_{task_id}")
     )
     markup.row(
         types.InlineKeyboardButton("◀️ Назад к календарю", callback_data="back_calendar"),
