@@ -1155,10 +1155,14 @@ def callback_handler(call):
         show_calendar(user_id, msg_id)
         bot.answer_callback_query(call.id)
 
-    elif data == 'main_menu':
-        bot.edit_message_text("🏠 <b>Главное меню</b>", user_id, msg_id,
-                              parse_mode='HTML', reply_markup=create_main_keyboard())
-        bot.answer_callback_query(call.id)
+   elif data == 'main_menu':
+    bot.send_message(
+        user_id,
+        "🏠 <b>Главное меню</b>",
+        parse_mode='HTML',
+        reply_markup=create_main_keyboard()
+    )
+    bot.answer_callback_query(call.id)
 
     # ========== НАПОМИНАНИЯ ==========
     elif data == 'before_none':
