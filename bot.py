@@ -1140,6 +1140,13 @@ def callback_handler(call):
             show_day_tasks(user_id, task[2], msg_id)
         bot.answer_callback_query(call.id, "Удалено")
 
+    elif data.startswith('move_'):
+        task_id = int(data.replace('move_', ''))
+        user_temp_data[user_id] = {'move_task_id': task_id}
+        bot.send_message(user_id, "📅 Выбери новую дату:", reply_markup=create_calendar_keyboard(user_id))
+        bot.answer_callback_query(call.id)
+
+
     elif data.startswith('clear_ask_'):
         date = data.replace('clear_ask_', '')
         bot.edit_message_text(f"⚠️ Удалить все дела на {format_date(date)}?", user_id, msg_id,
@@ -1163,12 +1170,6 @@ def callback_handler(call):
         parse_mode='HTML',
         reply_markup=create_main_keyboard()
     )
-        bot.answer_callback_query(call.id)
-
-    elif data.startswith('move_'):
-        tid = int(data.replace('move_', ''))
-        user_temp_data[user_id] = {'move_task_id': tid}
-        bot.send_message(user_id, "📅 Выбери новую дату:", reply_markup=create_calendar_keyboard(user_id))
         bot.answer_callback_query(call.id)
 
     # ========== НАПОМИНАНИЯ ==========
