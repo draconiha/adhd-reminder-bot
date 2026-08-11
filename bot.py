@@ -1155,7 +1155,7 @@ def callback_handler(call):
         show_calendar(user_id, msg_id)
         bot.answer_callback_query(call.id)
 
-   elif data == 'main_menu':
+    elif data == 'main_menu':
     bot.send_message(
         user_id,
         "🏠 <b>Главное меню</b>",
