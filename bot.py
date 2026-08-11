@@ -1141,8 +1141,8 @@ def callback_handler(call):
         bot.answer_callback_query(call.id, "Удалено")
 
     elif data.startswith('move_'):
-        task_id = int(data.replace('move_', ''))
-        user_temp_data[user_id] = {'move_task_id': task_id}
+        tid = int(data.replace('move_', ''))
+        user_temp_data[user_id] = {'move_task_id': tid}
         bot.send_message(user_id, "📅 Выбери новую дату:", reply_markup=create_calendar_keyboard(user_id))
         bot.answer_callback_query(call.id)
 
