@@ -876,8 +876,7 @@ def show_day_tasks(user_id, date_str, edit_message_id=None):
     markup.row(
         types.InlineKeyboardButton("➕ Плюс дело", callback_data=f"add_{date_str}"),
         types.InlineKeyboardButton("🔄 Повтор", callback_data=f"recur_{date_str}"),
-        types.InlineKeyboardButton("🗑️ Минус вайб", callback_data=f"clear_ask_{date_str}"),
-        types.InlineKeyboardButton("📅 Перенести", callback_data=f"move_{task_id}")
+        types.InlineKeyboardButton("🗑️ Минус вайб", callback_data=f"clear_ask_{date_str}")
     )
     markup.row(
         types.InlineKeyboardButton("◀️ Назад к календарю", callback_data="back_calendar"),
@@ -1163,13 +1162,7 @@ def callback_handler(call):
         parse_mode='HTML',
         reply_markup=create_main_keyboard()
     )
-        bot.answer_callback_query(call.id)
-
-    elif data.startswith('move_'):
-        tid = int(data.replace('move_', ''))
-        user_temp_data[user_id] = {'move_task_id': tid}
-        bot.send_message(user_id, "📅 Выбери новую дату:", reply_markup=create_calendar_keyboard(user_id))
-        bot.answer_callback_query(call.id)
+    bot.answer_callback_query(call.id)
 
     # ========== НАПОМИНАНИЯ ==========
     elif data == 'before_none':
