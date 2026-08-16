@@ -1101,14 +1101,14 @@ def callback_handler(call):
 
     # ========== КАЛЕНДАРЬ ==========
     if data.startswith('calendar_'):
-        parts = data.split('_')
-        year = int(parts[1])
-        month = int(parts[2])
-        show_calendar(user_id, msg_id)
-        bot.answer_callback_query(call.id)
+    parts = data.split('_')
+    year = int(parts[1])
+    month = int(parts[2])
+    show_calendar(user_id, msg_id)
+    bot.answer_callback_query(call.id)
 
-    elif data.startswith('day_'):
-         date = data.replace('day_', '')
+elif data.startswith('day_'):
+    date = data.replace('day_', '')
 
     if user_id in user_temp_data and 'move_task_id' in user_temp_data[user_id]:
         task_id = user_temp_data[user_id]['move_task_id']
@@ -1134,24 +1134,24 @@ def callback_handler(call):
 
     bot.answer_callback_query(call.id)
 
-    elif data.startswith('add_'):
-        date = data.replace('add_', '')
-        user_states[user_id] = {'action': 'add_with_date', 'date': date}
-        bot.send_message(user_id, f"Напиши, что нужно сделать {format_date(date)}:")
-        bot.answer_callback_query(call.id)
+elif data.startswith('add_'):
+    date = data.replace('add_', '')
+    user_states[user_id] = {'action': 'add_with_date', 'date': date}
+    bot.send_message(user_id, f"Напиши, что нужно сделать {format_date(date)}:")
+    bot.answer_callback_query(call.id)
 
-    elif data.startswith('task_'):
-        task_id = int(data.replace('task_', ''))
-        show_task_details(user_id, task_id, msg_id)
-        bot.answer_callback_query(call.id)
+elif data.startswith('task_'):
+    task_id = int(data.replace('task_', ''))
+    show_task_details(user_id, task_id, msg_id)
+    bot.answer_callback_query(call.id)
 
-    elif data.startswith('done_'):
-        task_id = int(data.replace('done_', ''))
-        mark_task_done(task_id, user_id)
-        task = get_task_by_id(task_id)
-        if task:
-            show_day_tasks(user_id, task[2], msg_id)
-        bot.answer_callback_query(call.id, "Выполнено! 🎉")
+elif data.startswith('done_'):
+    task_id = int(data.replace('done_', ''))
+    mark_task_done(task_id, user_id)
+    task = get_task_by_id(task_id)
+    if task:
+        show_day_tasks(user_id, task[2], msg_id)
+    bot.answer_callback_query(call.id, "Выполнено! 🎉")
 
     elif data.startswith('delete_one_'):
         task_id = int(data.replace('delete_one_', ''))
