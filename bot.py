@@ -1107,7 +1107,7 @@ def callback_handler(call):
         show_calendar(user_id, msg_id)
         bot.answer_callback_query(call.id)
 
-   elif data.startswith('day_'):
+    elif data.startswith('day_'):
     date = data.replace('day_', '')
 
     if user_id in user_temp_data and 'move_task_id' in user_temp_data[user_id]:
