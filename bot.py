@@ -877,7 +877,6 @@ def show_day_tasks(user_id, date_str, edit_message_id=None):
         types.InlineKeyboardButton("➕ Плюс дело", callback_data=f"add_{date_str}"),
         types.InlineKeyboardButton("🔄 Повтор", callback_data=f"recur_{date_str}"),
         types.InlineKeyboardButton("🗑️ Минус вайб", callback_data=f"clear_ask_{date_str}"),
-        types.InlineKeyboardButton("📅 Перенести", callback_data=f"move_{task_id}")
     )
     markup.row(
         types.InlineKeyboardButton("◀️ Назад к календарю", callback_data="back_calendar"),
@@ -1108,10 +1107,32 @@ def callback_handler(call):
         show_calendar(user_id, msg_id)
         bot.answer_callback_query(call.id)
 
-    elif data.startswith('day_'):
-        date = data.replace('day_', '')
+   elif data.startswith('day_'):
+    date = data.replace('day_', '')
+
+    if user_id in user_temp_data and 'move_task_id' in user_temp_data[user_id]:
+        task_id = user_temp_data[user_id]['move_task_id']
+
+        conn = sqlite3.connect('tasks.db')
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE tasks SET date = ? WHERE id = ? AND user_id = ?",
+            (date, task_id, user_id)
+        )
+        conn.commit()
+        conn.close()
+
+        del user_temp_data[user_id]
+
+        bot.send_message(
+            user_id,
+            f"✅ Дело перенесено на {format_date(date)}!"
+        )
+        show_day_tasks(user_id, date)
+    else:
         show_day_tasks(user_id, date, msg_id)
-        bot.answer_callback_query(call.id)
+
+    bot.answer_callback_query(call.id)
 
     elif data.startswith('add_'):
         date = data.replace('add_', '')
