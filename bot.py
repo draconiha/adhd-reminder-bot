@@ -1101,77 +1101,91 @@ def callback_handler(call):
 
     # ========== КАЛЕНДАРЬ ==========
     if data.startswith('calendar_'):
-    parts = data.split('_')
-    year = int(parts[1])
-    month = int(parts[2])
-    show_calendar(user_id, msg_id)
-    bot.answer_callback_query(call.id)
+        parts = data.split('_')
+        year = int(parts[1])
+        month = int(parts[2])
+        show_calendar(user_id, msg_id)
+        bot.answer_callback_query(call.id)
 
-elif data.startswith('day_'):
-    date = data.replace('day_', '')
+    elif data.startswith('day_'):
+        date = data.replace('day_', '')
 
-    if user_id in user_temp_data and 'move_task_id' in user_temp_data[user_id]:
-        task_id = user_temp_data[user_id]['move_task_id']
+        if user_id in user_temp_data and 'move_task_id' in user_temp_data[user_id]:
+            task_id = user_temp_data[user_id]['move_task_id']
 
-        conn = sqlite3.connect('tasks.db')
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE tasks SET date = ? WHERE id = ? AND user_id = ?",
-            (date, task_id, user_id)
-        )
-        conn.commit()
-        conn.close()
+            conn = sqlite3.connect('tasks.db')
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE tasks SET date = ? WHERE id = ? AND user_id = ?",
+                (date, task_id, user_id)
+            )
+            conn.commit()
+            conn.close()
 
-        del user_temp_data[user_id]
+            del user_temp_data[user_id]
 
+            bot.send_message(
+                user_id,
+                f"✅ Дело перенесено на {format_date(date)}!"
+            )
+            show_day_tasks(user_id, date)
+        else:
+            show_day_tasks(user_id, date, msg_id)
+
+        bot.answer_callback_query(call.id)
+
+    elif data.startswith('add_'):
+        date = data.replace('add_', '')
+        user_states[user_id] = {'action': 'add_with_date', 'date': date}
         bot.send_message(
             user_id,
-            f"✅ Дело перенесено на {format_date(date)}!"
+            f"Напиши, что нужно сделать {format_date(date)}:"
         )
-        show_day_tasks(user_id, date)
-    else:
-        show_day_tasks(user_id, date, msg_id)
+        bot.answer_callback_query(call.id)
 
-    bot.answer_callback_query(call.id)
+    elif data.startswith('task_'):
+        task_id = int(data.replace('task_', ''))
+        show_task_details(user_id, task_id, msg_id)
+        bot.answer_callback_query(call.id)
 
-elif data.startswith('add_'):
-    date = data.replace('add_', '')
-    user_states[user_id] = {'action': 'add_with_date', 'date': date}
-    bot.send_message(user_id, f"Напиши, что нужно сделать {format_date(date)}:")
-    bot.answer_callback_query(call.id)
+    elif data.startswith('done_'):
+        task_id = int(data.replace('done_', ''))
+        mark_task_done(task_id, user_id)
+        task = get_task_by_id(task_id)
 
-elif data.startswith('task_'):
-    task_id = int(data.replace('task_', ''))
-    show_task_details(user_id, task_id, msg_id)
-    bot.answer_callback_query(call.id)
+        if task:
+            show_day_tasks(user_id, task[2], msg_id)
 
-elif data.startswith('done_'):
-    task_id = int(data.replace('done_', ''))
-    mark_task_done(task_id, user_id)
-    task = get_task_by_id(task_id)
-    if task:
-        show_day_tasks(user_id, task[2], msg_id)
-    bot.answer_callback_query(call.id, "Выполнено! 🎉")
+        bot.answer_callback_query(call.id, "Выполнено! 🎉")
 
     elif data.startswith('delete_one_'):
         task_id = int(data.replace('delete_one_', ''))
         task = get_task_by_id(task_id)
+
         if task:
             delete_task(task_id, user_id)
             show_day_tasks(user_id, task[2], msg_id)
+
         bot.answer_callback_query(call.id, "Удалено")
 
     elif data.startswith('move_'):
         tid = int(data.replace('move_', ''))
         user_temp_data[user_id] = {'move_task_id': tid}
-        bot.send_message(user_id, "📅 Выбери новую дату:", reply_markup=create_calendar_keyboard(user_id))
+        bot.send_message(
+            user_id,
+            "📅 Выбери новую дату:",
+            reply_markup=create_calendar_keyboard(user_id)
+        )
         bot.answer_callback_query(call.id)
-
 
     elif data.startswith('clear_ask_'):
         date = data.replace('clear_ask_', '')
-        bot.edit_message_text(f"⚠️ Удалить все дела на {format_date(date)}?", user_id, msg_id,
-                              reply_markup=create_confirm_clear_keyboard(date))
+        bot.edit_message_text(
+            f"⚠️ Удалить все дела на {format_date(date)}?",
+            user_id,
+            msg_id,
+            reply_markup=create_confirm_clear_keyboard(date)
+        )
         bot.answer_callback_query(call.id)
 
     elif data.startswith('clear_confirm_'):
@@ -1186,11 +1200,11 @@ elif data.startswith('done_'):
 
     elif data == 'main_menu':
         bot.send_message(
-        user_id,
-        "🏠 <b>Главное меню</b>",
-        parse_mode='HTML',
-        reply_markup=create_main_keyboard()
-    )
+            user_id,
+            "🏠 <b>Главное меню</b>",
+            parse_mode='HTML',
+            reply_markup=create_main_keyboard()
+        )
         bot.answer_callback_query(call.id)
 
     # ========== НАПОМИНАНИЯ ==========
