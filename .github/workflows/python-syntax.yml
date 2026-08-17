@@ -1,0 +1,20 @@
+name: Проверка Python-кода
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  syntax-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Скачать код
+        uses: actions/checkout@v4
+
+      - name: Установить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Проверить синтаксис всех Python-файлов
+        run: python -m compileall -q .
