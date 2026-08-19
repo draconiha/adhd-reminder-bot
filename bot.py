@@ -413,18 +413,20 @@ def get_tasks_by_date(user_id, date_str):
 def add_task_to_db(user_id, task_text, date_str, reminder_time="09:00", remind_before=0):
     conn = sqlite3.connect('tasks.db')
     cursor = conn.cursor()
-    
-        if reminder_time == "none":
+
+    if reminder_time == "none":
         settings = get_user_settings(user_id)
         reminder_time = settings['default_reminder_time']
-            
-    cursor.execute("INSERT INTO tasks (user_id, task, date, reminder_time, remind_before) VALUES (?,?,?,?,?)",
-                   (user_id, task_text, date_str, reminder_time, remind_before)
-                  )
+
+    cursor.execute(
+        "INSERT INTO tasks (user_id, task, date, reminder_time, remind_before) VALUES (?,?,?,?,?)",
+        (user_id, task_text, date_str, reminder_time, remind_before)
+    )
 
     task_id = cursor.lastrowid
     conn.commit()
     conn.close()
+
     return task_id
 
 def get_task_by_id(task_id):
