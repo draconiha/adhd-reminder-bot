@@ -1222,7 +1222,109 @@ def callback_handler(call):
             reply_markup=create_main_keyboard()
         )
         bot.answer_callback_query(call.id)
+        
+    # --- НАСТРОЙКИ ---
+    elif data == 'setting_default_time':
+        bot.edit_message_text(
+            "⏰ Выбери время по умолчанию:",
+            user_id,
+            msg_id,
+            reply_markup=create_default_time_keyboard(user_id)
+        )
+        bot.answer_callback_query(call.id)
 
+    elif data == 'setting_default_before':
+        bot.edit_message_text(
+            "⏱️ Напоминать заранее:",
+            user_id,
+            msg_id,
+            reply_markup=create_default_before_keyboard(user_id)
+        )
+        bot.answer_callback_query(call.id)
+
+    elif data == 'setting_recurring':
+        bot.edit_message_text(
+            "🔁 Управление повторяющимися делами:",
+            user_id,
+            msg_id,
+            reply_markup=create_recurring_management_keyboard()
+        )
+        bot.answer_callback_query(call.id)
+
+    elif data == 'setting_stats':
+        show_user_stats(user_id, msg_id)
+        bot.answer_callback_query(call.id)
+
+    elif data.startswith('dtime_'):
+        if data == 'dtime_back_settings':
+            settings = get_user_settings(user_id)
+            bot.edit_message_text(
+                f"⚙️ Твои настройки:\n"
+                f"⏰ Время по умолчанию: {settings['default_reminder_time']}\n"
+                f"⏱️ Напоминать заранее: {settings['default_remind_before']} мин",
+                user_id,
+                msg_id,
+                reply_markup=create_settings_keyboard()
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        time_val = data.replace('dtime_', '')
+        update_user_setting(user_id, 'default_reminder_time', time_val)
+
+        settings = get_user_settings(user_id)
+        bot.edit_message_text(
+            f"⚙️ Твои настройки:\n"
+            f"⏰ Время по умолчанию: {settings['default_reminder_time']}\n"
+            f"⏱️ Напоминать заранее: {settings['default_remind_before']} мин",
+            user_id,
+            msg_id,
+            reply_markup=create_settings_keyboard()
+        )
+        bot.answer_callback_query(call.id, f"✅ Время по умолчанию: {time_val}")
+
+    elif data.startswith('dbefore_'):
+        if data == 'dbefore_back_settings':
+            settings = get_user_settings(user_id)
+            bot.edit_message_text(
+                f"⚙️ Твои настройки:\n"
+                f"⏰ Время по умолчанию: {settings['default_reminder_time']}\n"
+                f"⏱️ Напоминать заранее: {settings['default_remind_before']} мин",
+                user_id,
+                msg_id,
+                reply_markup=create_settings_keyboard()
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        before_val = int(data.replace('dbefore_', ''))
+        update_user_setting(user_id, 'default_remind_before', before_val)
+
+        settings = get_user_settings(user_id)
+        bot.edit_message_text(
+            f"⚙️ Твои настройки:\n"
+            f"⏰ Время по умолчанию: {settings['default_reminder_time']}\n"
+            f"⏱️ Напоминать заранее: {settings['default_remind_before']} мин",
+            user_id,
+            msg_id,
+            reply_markup=create_settings_keyboard()
+        )
+        bot.answer_callback_query(
+            call.id,
+            f"✅ Напоминание заранее: {before_val} мин"
+        )
+
+    elif data == 'back_settings':
+        settings = get_user_settings(user_id)
+        bot.edit_message_text(
+            f"⚙️ Твои настройки:\n"
+            f"⏰ Время по умолчанию: {settings['default_reminder_time']}\n"
+            f"⏱️ Напоминать заранее: {settings['default_remind_before']} мин",
+            user_id,
+            msg_id,
+            reply_markup=create_settings_keyboard()
+        )
+        bot.answer_callback_query(call.id)
     # ========== НАПОМИНАНИЯ ==========
     elif data == 'before_none':
         if user_id not in user_temp_data:
