@@ -840,13 +840,23 @@ def daily_report_worker():
         time.sleep(30)
 
 # ========== ОСНОВНЫЕ ФУНКЦИИ ОТОБРАЖЕНИЯ ==========
-def show_calendar(user_id, edit_message_id=None):
+def show_calendar(user_id, edit_message_id=None, year=None, month=None):
     text = "📅 Выберите день:"
-    markup = create_calendar_keyboard(user_id)
+    markup = create_calendar_keyboard(user_id, year, month)
+
     if edit_message_id:
-        bot.edit_message_text(text, user_id, edit_message_id, reply_markup=markup)
+        bot.edit_message_text(
+            text,
+            user_id,
+            edit_message_id,
+            reply_markup=markup
+        )
     else:
-        msg = bot.send_message(user_id, text, reply_markup=markup)
+        msg = bot.send_message(
+            user_id,
+            text,
+            reply_markup=markup
+        )
         user_calendar_messages[user_id] = msg.message_id
 
 def show_day_tasks(user_id, date_str, edit_message_id=None):
@@ -1110,9 +1120,9 @@ def callback_handler(call):
         parts = data.split('_')
         year = int(parts[1])
         month = int(parts[2])
-        show_calendar(user_id, msg_id)
+        show_calendar(user_id, msg_id, year, month)
         bot.answer_callback_query(call.id)
-
+    
     elif data.startswith('day_'):
         date = data.replace('day_', '')
 
