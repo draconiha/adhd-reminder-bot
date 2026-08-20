@@ -371,25 +371,128 @@ def create_stats_choice_keyboard():
 
 def create_recurring_list_keyboard(tasks, page=0, tasks_per_page=5):
     markup = types.InlineKeyboardMarkup(row_width=1)
+
     start_idx = page * tasks_per_page
     end_idx = start_idx + tasks_per_page
     current_tasks = tasks[start_idx:end_idx]
+
     for task in current_tasks:
-        (task_id, task_text, recurrence_type, recurrence_days_json,
-         reminder_time, remind_before, start_date, end_date, is_active) = task
+        (
+            task_id,
+            task_text,
+            recurrence_type,
+            recurrence_days_json,
+            reminder_time,
+            remind_before,
+            start_date,
+            end_date,
+            is_active
+        ) = task
+
         short_text = task_text[:30] + "..." if len(task_text) > 30 else task_text
-        markup.add(types.InlineKeyboardButton(f"🗑️ {short_text}", callback_data=f"delete_recurring_{task_id}"))
+
+        markup.add(
+            types.InlineKeyboardButton(
+                f"🔄 {short_text}",
+                callback_data=f"recurring_view_{task_id}"
+            )
+        )
+
     navigation_buttons = []
+
     if page > 0:
-        navigation_buttons.append(types.InlineKeyboardButton("◀️ Назад", callback_data=f"recurring_page_{page-1}"))
+        navigation_buttons.append(
+            types.InlineKeyboardButton(
+                "◀️ Назад",
+                callback_data=f"recurring_page_{page - 1}"
+            )
+        )
+
     if end_idx < len(tasks):
-        navigation_buttons.append(types.InlineKeyboardButton("Вперед ▶️", callback_data=f"recurring_page_{page+1}"))
+        navigation_buttons.append(
+            types.InlineKeyboardButton(
+                "Вперёд ▶️",
+                callback_data=f"recurring_page_{page + 1}"
+            )
+        )
+
     if navigation_buttons:
         markup.row(*navigation_buttons)
+
     markup.row(
-        types.InlineKeyboardButton("🗑️ Удалить все", callback_data="recurring_delete_all_ask"),
-        types.InlineKeyboardButton("◀️ Назад к управлению", callback_data="recurring_manage")
+        types.InlineKeyboardButton(
+            "🗑️ Удалить все",
+            callback_data="recurring_delete_all_ask"
+        ),
+        types.InlineKeyboardButton(
+            "◀️ Назад к управлению",
+            callback_data="recurring_manage"
+        )
     )
+
+    return markup
+
+def create_recurring_list_keyboard(tasks, page=0, tasks_per_page=5):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+
+    start_idx = page * tasks_per_page
+    end_idx = start_idx + tasks_per_page
+    current_tasks = tasks[start_idx:end_idx]
+
+    for task in current_tasks:
+        (
+            task_id,
+            task_text,
+            recurrence_type,
+            recurrence_days_json,
+            reminder_time,
+            remind_before,
+            start_date,
+            end_date,
+            is_active
+        ) = task
+
+        short_text = task_text[:30] + "..." if len(task_text) > 30 else task_text
+
+        markup.add(
+            types.InlineKeyboardButton(
+                f"🔄 {short_text}",
+                callback_data=f"recurring_view_{task_id}"
+            )
+        )
+
+    navigation_buttons = []
+
+    if page > 0:
+        navigation_buttons.append(
+            types.InlineKeyboardButton(
+                "◀️ Назад",
+                callback_data=f"recurring_page_{page - 1}"
+            )
+        )
+
+    if end_idx < len(tasks):
+        navigation_buttons.append(
+            types.InlineKeyboardButton(
+                "Вперёд ▶️",
+                callback_data=f"recurring_page_{page + 1}"
+            )
+        )
+
+    if navigation_buttons:
+        markup.row(*navigation_buttons)
+
+    markup.row(
+        types.InlineKeyboardButton(
+            "🗑️ Удалить все",
+            callback_data="recurring_delete_all_ask"
+        ),
+        types.InlineKeyboardButton(
+            "◀️ Назад к управлению",
+            callback_data="recurring_manage"
+        )
+    )
+
     return markup
 
 def create_confirm_delete_all_recurring_keyboard():
@@ -1614,17 +1717,47 @@ def callback_handler(call):
         tasks = get_recurring_tasks(user_id)
         bot.edit_message_reply_markup(user_id, msg_id, reply_markup=create_recurring_list_keyboard(tasks, page))
 
-    elif data.startswith('delete_recurring_'):
-        task_id = int(data.replace('delete_recurring_', ''))
-        delete_recurring_task(task_id, user_id)
-        tasks = get_recurring_tasks(user_id)
-        if tasks:
-            bot.edit_message_text("🔁 Управление повторяющимися делами:", user_id, msg_id,
-                                reply_markup=create_recurring_management_keyboard())
-        else:
-            bot.send_message(user_id, "✅ Повторяющаяся задача удалена!")
-        bot.answer_callback_query(call.id)
+    elif data.startswith('recurring_view_'):
+    task_id = int(data.replace('recurring_view_', ''))
 
+    show_recurring_details(
+        user_id,
+        task_id,
+        msg_id
+    )
+
+    bot.answer_callback_query(call.id)
+
+
+elif data.startswith('delete_recurring_'):
+    task_id = int(data.replace('delete_recurring_', ''))
+
+    delete_recurring_task(
+        task_id,
+        user_id
+    )
+
+    tasks = get_recurring_tasks(user_id)
+
+    if tasks:
+        bot.edit_message_text(
+            "📋 Список повторяющихся дел:",
+            user_id,
+            msg_id,
+            reply_markup=create_recurring_list_keyboard(tasks)
+        )
+    else:
+        bot.edit_message_text(
+            "📭 Повторяющихся дел больше нет.",
+            user_id,
+            msg_id,
+            reply_markup=create_recurring_management_keyboard()
+        )
+
+    bot.answer_callback_query(
+        call.id,
+        "✅ Удалено"
+    )
     elif data == 'recurring_delete_all_ask':
         tasks = get_recurring_tasks(user_id)
         if not tasks:
