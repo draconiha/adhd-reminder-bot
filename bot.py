@@ -1729,8 +1729,8 @@ def callback_handler(call):
     bot.answer_callback_query(call.id)
 
 
-elif data.startswith('delete_recurring_'):
-    task_id = int(data.replace('delete_recurring_', ''))
+    elif data.startswith('delete_recurring_'):
+        task_id = int(data.replace('delete_recurring_', ''))
 
     delete_recurring_task(
         task_id,
