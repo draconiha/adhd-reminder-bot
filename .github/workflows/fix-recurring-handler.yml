@@ -1,0 +1,82 @@
+name: Fix recurring handler
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Fix handler block
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('bot.py')
+          text = path.read_text(encoding='utf-8')
+
+          start_marker = "\n        elif data.startswith('recurring_view_'):"
+          end_marker = "\n    elif data == 'recurring_delete_all_ask':"
+
+          start = text.find(start_marker)
+          end = text.find(end_marker, start)
+
+          if start == -1 or end == -1:
+              raise SystemExit('Could not locate malformed recurring handler block')
+
+          fixed = '''
+    elif data.startswith('recurring_view_'):
+        task_id = int(data.replace('recurring_view_', ''))
+        show_recurring_details(user_id, task_id, msg_id)
+        bot.answer_callback_query(call.id)
+
+    elif data.startswith('delete_recurring_'):
+        task_id = int(data.replace('delete_recurring_', ''))
+        delete_recurring_task(task_id, user_id)
+
+        tasks = get_recurring_tasks(user_id)
+
+        if tasks:
+            bot.edit_message_text(
+                "📋 Список повторяющихся дел:",
+                user_id,
+                msg_id,
+                reply_markup=create_recurring_list_keyboard(tasks)
+            )
+        else:
+            bot.edit_message_text(
+                "📭 Повторяющихся дел больше нет.",
+                user_id,
+                msg_id,
+                reply_markup=create_recurring_management_keyboard()
+            )
+
+        bot.answer_callback_query(call.id, "✅ Удалено")
+'''
+
+          text = text[:start] + fixed + text[end:]
+          path.write_text(text, encoding='utf-8')
+          print('Recurring handler indentation fixed')
+          PY
+
+      - name: Check syntax
+        run: python -m compileall -q .
+
+      - name: Commit repair and remove this workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bot.py
+          git rm -f .github/workflows/fix-recurring-handler.yml
+          git commit -m "Fix recurring handler indentation [skip ci]" || exit 0
+          git push
