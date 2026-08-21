@@ -1,0 +1,58 @@
+name: Fix recurring indentation
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fix callback indentation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('bot.py')
+          text = path.read_text(encoding='utf-8')
+
+          start = "        elif data.startswith('recurring_view_'):\n"
+          end = "    elif data == 'recurring_delete_all_ask':\n"
+
+          start_pos = text.find(start)
+          end_pos = text.find(end, start_pos)
+
+          if start_pos == -1 or end_pos == -1:
+              raise SystemExit('Could not find recurring callback block')
+
+          replacement = '''    elif data.startswith('recurring_view_'):\n        task_id = int(data.replace('recurring_view_', ''))\n\n        show_recurring_details(\n            user_id,\n            task_id,\n            msg_id\n        )\n\n        bot.answer_callback_query(call.id)\n\n    elif data.startswith('delete_recurring_'):\n        task_id = int(data.replace('delete_recurring_', ''))\n\n        delete_recurring_task(\n            task_id,\n            user_id\n        )\n\n        tasks = get_recurring_tasks(user_id)\n\n        if tasks:\n            bot.edit_message_text(\n                \"📋 Список повторяющихся дел:\",\n                user_id,\n                msg_id,\n                reply_markup=create_recurring_list_keyboard(tasks)\n            )\n        else:\n            bot.edit_message_text(\n                \"📭 Повторяющихся дел больше нет.\",\n                user_id,\n                msg_id,\n                reply_markup=create_recurring_management_keyboard()\n            )\n\n        bot.answer_callback_query(\n            call.id,\n            \"✅ Удалено\"\n        )\n\n'''
+
+          text = text[:start_pos] + replacement + text[end_pos:]
+          path.write_text(text, encoding='utf-8')
+          print('Recurring indentation fixed')
+          PY
+
+      - name: Check syntax
+        run: python -m compileall -q .
+
+      - name: Commit repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bot.py
+          git commit -m "Fix recurring callback indentation [skip ci]" || exit 0
+          git push
+
+      - name: Remove one-time workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f .github/workflows/fix-recurring-indentation.yml
+          git commit -m "Remove one-time repair workflow [skip ci]" || exit 0
+          git push
