@@ -1712,52 +1712,47 @@ def callback_handler(call):
                            parse_mode='HTML', reply_markup=create_reminder_time_keyboard(user_id))
         bot.answer_callback_query(call.id)
 
-    elif data.startswith('recurring_page_'):
-        page = int(data.replace('recurring_page_', ''))
-        tasks = get_recurring_tasks(user_id)
-        bot.edit_message_reply_markup(user_id, msg_id, reply_markup=create_recurring_list_keyboard(tasks, page))
+        elif data.startswith('recurring_view_'):
+        task_id = int(data.replace('recurring_view_', ''))
 
-    elif data.startswith('recurring_view_'):
-         task_id = int(data.replace('recurring_view_', ''))
+        show_recurring_details(
+            user_id,
+            task_id,
+            msg_id
+        )
 
-    show_recurring_details(
-        user_id,
-        task_id,
-        msg_id
-    )
-
-    bot.answer_callback_query(call.id)
-
+        bot.answer_callback_query(call.id)
 
     elif data.startswith('delete_recurring_'):
         task_id = int(data.replace('delete_recurring_', ''))
 
-    delete_recurring_task(
-        task_id,
-        user_id
-    )
-
-    tasks = get_recurring_tasks(user_id)
-
-    if tasks:
-        bot.edit_message_text(
-            "📋 Список повторяющихся дел:",
-            user_id,
-            msg_id,
-            reply_markup=create_recurring_list_keyboard(tasks)
-        )
-    else:
-        bot.edit_message_text(
-            "📭 Повторяющихся дел больше нет.",
-            user_id,
-            msg_id,
-            reply_markup=create_recurring_management_keyboard()
+        delete_recurring_task(
+            task_id,
+            user_id
         )
 
-    bot.answer_callback_query(
-        call.id,
-        "✅ Удалено"
-    )
+        tasks = get_recurring_tasks(user_id)
+
+        if tasks:
+            bot.edit_message_text(
+                "📋 Список повторяющихся дел:",
+                user_id,
+                msg_id,
+                reply_markup=create_recurring_list_keyboard(tasks)
+            )
+        else:
+            bot.edit_message_text(
+                "📭 Повторяющихся дел больше нет.",
+                user_id,
+                msg_id,
+                reply_markup=create_recurring_management_keyboard()
+            )
+
+        bot.answer_callback_query(
+            call.id,
+            "✅ Удалено"
+        )
+
     elif data == 'recurring_delete_all_ask':
         tasks = get_recurring_tasks(user_id)
         if not tasks:
