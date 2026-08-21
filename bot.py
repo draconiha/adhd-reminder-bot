@@ -1712,7 +1712,7 @@ def callback_handler(call):
                            parse_mode='HTML', reply_markup=create_reminder_time_keyboard(user_id))
         bot.answer_callback_query(call.id)
 
-        elif data.startswith('recurring_view_'):
+    elif data.startswith('recurring_view_'):
         task_id = int(data.replace('recurring_view_', ''))
 
         show_recurring_details(
