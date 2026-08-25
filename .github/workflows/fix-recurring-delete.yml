@@ -21,6 +21,7 @@ jobs:
           python-version: '3.13'
 
       - name: Patch recurring task deletion
+        shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -29,89 +30,99 @@ jobs:
           path = Path('bot.py')
           text = path.read_text(encoding='utf-8')
 
-          # 1) Add a stable link from generated tasks to their recurring template.
-          migration = """        if 'recurring_id' not in columns:\n            cursor.execute(\"ALTER TABLE tasks ADD COLUMN recurring_id INTEGER\")\n"""
-          marker = "        if 'reminder_sent' not in columns:\n            cursor.execute(\"ALTER TABLE tasks ADD COLUMN reminder_sent INTEGER DEFAULT 0\")\n"
+          # 1. Add a stable link from generated tasks to their recurring template.
+          migration_marker = '''        if 'reminder_sent' not in columns:\n            cursor.execute("ALTER TABLE tasks ADD COLUMN reminder_sent INTEGER DEFAULT 0")\n'''
+          migration_add = '''        if 'recurring_id' not in columns:\n            cursor.execute("ALTER TABLE tasks ADD COLUMN recurring_id INTEGER")\n'''
           if "if 'recurring_id' not in columns:" not in text:
-              if marker not in text:
-                  raise SystemExit('Could not find tasks column migration block')
-              text = text.replace(marker, marker + migration, 1)
+              if migration_marker not in text:
+                  raise SystemExit('Could not find tasks migration block')
+              text = text.replace(migration_marker, migration_marker + migration_add, 1)
 
-          # 2) Store recurring_id on newly generated instances.
-          old_insert = """                    cursor.execute(\n                        \"INSERT INTO tasks (user_id, task, date, reminder_time, remind_before, reminder_sent) VALUES (?, ?, ?, ?, ?, 0)\",\n                        (user_id, task_text, date_str, reminder_time, remind_before)\n                    )\n"""
-          new_insert = """                    cursor.execute(\n                        \"INSERT INTO tasks (user_id, task, date, reminder_time, remind_before, reminder_sent, recurring_id) VALUES (?, ?, ?, ?, ?, 0, ?)\",\n                        (user_id, task_text, date_str, reminder_time, remind_before, task_id)\n                    )\n"""
+          # 2. Generated task instances receive recurring_id.
+          old_insert = '''                    cursor.execute(\n                        "INSERT INTO tasks (user_id, task, date, reminder_time, remind_before, reminder_sent) VALUES (?, ?, ?, ?, ?, 0)",\n                        (user_id, task_text, date_str, reminder_time, remind_before)\n                    )\n'''
+          new_insert = '''                    cursor.execute(\n                        "INSERT INTO tasks (user_id, task, date, reminder_time, remind_before, reminder_sent, recurring_id) VALUES (?, ?, ?, ?, ?, 0, ?)",\n                        (user_id, task_text, date_str, reminder_time, remind_before, task_id)\n                    )\n'''
           if old_insert in text:
               text = text.replace(old_insert, new_insert, 1)
           elif 'reminder_sent, recurring_id' not in text:
               raise SystemExit('Could not find recurring task INSERT block')
 
-          # 3) Helper to backfill legacy generated instances safely enough.
-          legacy_helper = r'''\n\ndef migrate_legacy_recurring_instances():\n    \"\"\"Backfill recurring_id for future, unfinished instances created after their template.\"\"\"\n    conn = sqlite3.connect('tasks.db')\n    cursor = conn.cursor()\n    try:\n        cursor.execute(\"SELECT id, user_id, task, recurrence_type, recurrence_days, reminder_time, remind_before, start_date, end_date, created_at FROM recurring_tasks WHERE is_active = 1\")\n        recurring_tasks = cursor.fetchall()\n        today = get_current_time().date()\n\n        for recurring in recurring_tasks:\n            (rid, user_id, task_text, recurrence_type, recurrence_days_json,\n             reminder_time, remind_before, start_date_str, end_date_str, created_at) = recurring\n\n            try:\n                days = json.loads(recurrence_days_json) if recurrence_days_json else []\n            except Exception:\n                days = []\n\n            try:\n                start_date = datetime.datetime.strptime(start_date_str, \"%Y-%m-%d\").date()\n            except Exception:\n                start_date = today\n\n            try:\n                end_date = datetime.datetime.strptime(end_date_str, \"%Y-%m-%d\").date() if end_date_str else None\n            except Exception:\n                end_date = None\n\n            for offset in range(60):\n                current = today + datetime.timedelta(days=offset)\n                if current < start_date or (end_date and current > end_date):\n                    continue\n\n                should_exist = False\n                if recurrence_type == 'daily':\n                    should_exist = True\n                elif recurrence_type == 'weekdays':\n                    should_exist = current.weekday() < 5\n                elif recurrence_type == 'weekends':\n                    should_exist = current.weekday() >= 5\n                elif recurrence_type == 'weekly':\n                    should_exist = current.weekday() in days\n                elif recurrence_type == 'monthly':\n                    should_exist = current.day in days\n\n                if not should_exist:\n                    continue\n\n                date_str = current.strftime('%Y-%m-%d')\n                cursor.execute(\n                    \"\"\"UPDATE tasks\n                       SET recurring_id = ?\n                     WHERE user_id = ?\n                       AND recurring_id IS NULL\n                       AND task = ?\n                       AND date = ?\n                       AND reminder_time = ?\n                       AND remind_before = ?\n                       AND is_done = 0\n                       AND created_at >= ?\n                    \"\"\",\n                    (rid, user_id, task_text, date_str, reminder_time, remind_before, created_at)\n                )\n\n        conn.commit()\n    finally:\n        conn.close()\n'''
+          # 3. Backfill legacy future instances so existing repeats can also be removed cleanly.
+          legacy_helper = '''\n\ndef migrate_legacy_recurring_instances():\n    """Связывает уже созданные будущие экземпляры повторов с их шаблоном."""\n    conn = sqlite3.connect('tasks.db')\n    cursor = conn.cursor()\n    try:\n        cursor.execute(\n            "SELECT id, user_id, task, recurrence_type, recurrence_days, reminder_time, remind_before, start_date, end_date, created_at "\n            "FROM recurring_tasks WHERE is_active = 1"\n        )\n        recurring_tasks = cursor.fetchall()\n        today = get_current_time().date()\n        horizon = today + datetime.timedelta(days=60)\n\n        for recurring in recurring_tasks:\n            (rid, uid, task_text, recurrence_type, days_json, reminder_time,\n             remind_before, start_date_str, end_date_str, created_at) = recurring\n\n            try:\n                days = json.loads(days_json) if days_json else []\n            except Exception:\n                days = []\n\n            try:\n                start_date = datetime.datetime.strptime(start_date_str, '%Y-%m-%d').date()\n            except Exception:\n                start_date = today\n\n            try:\n                end_date = datetime.datetime.strptime(end_date_str, '%Y-%m-%d').date() if end_date_str else None\n            except Exception:\n                end_date = None\n\n            cursor.execute(\n                "SELECT id, date FROM tasks "\n                "WHERE user_id = ? AND recurring_id IS NULL AND task = ? "\n                "AND reminder_time = ? AND remind_before = ? "\n                "AND is_done = 0 AND date >= ? AND date <= ? AND created_at >= ?",\n                (uid, task_text, reminder_time, remind_before,\n                 today.strftime('%Y-%m-%d'), horizon.strftime('%Y-%m-%d'), created_at)\n            )\n\n            for task_row_id, date_str in cursor.fetchall():\n                try:\n                    d = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()\n                except Exception:\n                    continue\n\n                if d < start_date or (end_date and d > end_date):\n                    continue\n\n                should_exist = False\n                if recurrence_type == 'daily':\n                    should_exist = True\n                elif recurrence_type == 'weekdays':\n                    should_exist = d.weekday() < 5\n                elif recurrence_type == 'weekends':\n                    should_exist = d.weekday() >= 5\n                elif recurrence_type == 'weekly':\n                    should_exist = d.weekday() in days\n                elif recurrence_type == 'monthly':\n                    should_exist = d.day in days\n\n                if should_exist:\n                    cursor.execute(\n                        "UPDATE tasks SET recurring_id = ? WHERE id = ? AND recurring_id IS NULL",\n                        (rid, task_row_id)\n                    )\n\n        conn.commit()\n    finally:\n        conn.close()\n'''
           if 'def migrate_legacy_recurring_instances():' not in text:
               marker = 'def delete_recurring_task(task_id, user_id):'
               if marker not in text:
-                  raise SystemExit('Could not find recurring delete section')
+                  raise SystemExit('Could not find delete_recurring_task marker')
               text = text.replace(marker, legacy_helper + '\n' + marker, 1)
 
-          # 4) Replace deletion functions with versions that remove future generated instances.
+          # 4. Delete one recurring template and all of its future unfinished instances.
           delete_pattern = re.compile(r"def delete_recurring_task\(task_id, user_id\):\n.*?return True\n", re.S)
-          delete_replacement = '''def delete_recurring_task(task_id, user_id):\n    migrate_legacy_recurring_instances()\n    conn = sqlite3.connect('tasks.db')\n    cursor = conn.cursor()\n    cursor.execute(\"SELECT id FROM recurring_tasks WHERE id = ? AND user_id = ?\", (task_id, user_id))\n    exists = cursor.fetchone()\n    if not exists:\n        conn.close()\n        return False, 0\n\n    today_str = get_current_time().strftime('%Y-%m-%d')\n    cursor.execute(\n        \"DELETE FROM tasks WHERE user_id = ? AND recurring_id = ? AND date >= ? AND is_done = 0\",\n        (user_id, task_id, today_str)\n    )\n    deleted_instances = cursor.rowcount\n\n    cursor.execute(\n        \"DELETE FROM recurring_tasks WHERE id = ? AND user_id = ?\",\n        (task_id, user_id)\n    )\n    conn.commit()\n    conn.close()\n    return True, deleted_instances\n'''
+          delete_replacement = '''def delete_recurring_task(task_id, user_id):\n    migrate_legacy_recurring_instances()\n    conn = sqlite3.connect('tasks.db')\n    cursor = conn.cursor()\n\n    cursor.execute(\n        "SELECT id FROM recurring_tasks WHERE id = ? AND user_id = ?",\n        (task_id, user_id)\n    )\n    if not cursor.fetchone():\n        conn.close()\n        return False, 0\n\n    cursor.execute(\n        "DELETE FROM tasks WHERE user_id = ? AND recurring_id = ? AND is_done = 0 AND date >= ?",\n        (user_id, task_id, get_current_time().strftime('%Y-%m-%d'))\n    )\n    deleted_instances = cursor.rowcount\n\n    cursor.execute(\n        "DELETE FROM recurring_tasks WHERE id = ? AND user_id = ?",\n        (task_id, user_id)\n    )\n    conn.commit()\n    conn.close()\n    return True, deleted_instances\n'''
           text, count = delete_pattern.subn(delete_replacement, text, count=1)
           if count != 1:
               raise SystemExit('Could not replace delete_recurring_task')
 
-          delete_all_pattern = re.compile(r"def delete_all_recurring_tasks\(user_id\):\n.*?return deleted_count\n", re.S)
-          delete_all_replacement = '''def delete_all_recurring_tasks(user_id):\n    migrate_legacy_recurring_instances()\n    conn = sqlite3.connect('tasks.db')\n    cursor = conn.cursor()\n    today_str = get_current_time().strftime('%Y-%m-%d')\n    cursor.execute(\n        \"DELETE FROM tasks WHERE user_id = ? AND recurring_id IS NOT NULL AND date >= ? AND is_done = 0\",\n        (user_id, today_str)\n    )\n    deleted_instances = cursor.rowcount\n\n    cursor.execute(\"DELETE FROM recurring_tasks WHERE user_id = ?\", (user_id,))\n    deleted_count = cursor.rowcount\n    conn.commit()\n    conn.close()\n    return deleted_count, deleted_instances\n'''
-          text, count = delete_all_pattern.subn(delete_all_replacement, text, count=1)
+          # 5. Delete all recurring templates and their future unfinished instances.
+          all_pattern = re.compile(r"def delete_all_recurring_tasks\(user_id\):\n.*?return deleted_count\n", re.S)
+          all_replacement = '''def delete_all_recurring_tasks(user_id):\n    migrate_legacy_recurring_instances()\n    conn = sqlite3.connect('tasks.db')\n    cursor = conn.cursor()\n\n    cursor.execute(\n        "DELETE FROM tasks WHERE user_id = ? AND recurring_id IS NOT NULL AND is_done = 0 AND date >= ?",\n        (user_id, get_current_time().strftime('%Y-%m-%d'))\n    )\n    deleted_instances = cursor.rowcount\n\n    cursor.execute(\n        "DELETE FROM recurring_tasks WHERE user_id = ?",\n        (user_id,)\n    )\n    deleted_count = cursor.rowcount\n\n    conn.commit()\n    conn.close()\n    return deleted_count, deleted_instances\n'''
+          text, count = all_pattern.subn(all_replacement, text, count=1)
           if count != 1:
               raise SystemExit('Could not replace delete_all_recurring_tasks')
 
-          # 5) Make the detail card safe: deleting requires confirmation.
-          text = text.replace(\n              'callback_data=f\"delete_recurring_{task_id}\"',\n              'callback_data=f\"delete_recurring_ask_{task_id}\"',\n              1\n          )
-
-          if 'def create_confirm_delete_recurring_keyboard(task_id):' not in text:\n              confirm = r'''\n\ndef create_confirm_delete_recurring_keyboard(task_id):\n    markup = types.InlineKeyboardMarkup(row_width=2)\n    markup.add(\n        types.InlineKeyboardButton(\"✅ Да, удалить\", callback_data=f\"delete_recurring_confirm_{task_id}\"),\n        types.InlineKeyboardButton(\"❌ Нет\", callback_data=f\"recurring_view_{task_id}\")\n    )\n    return markup\n'''
+          # 6. Ensure the details card has its own keyboard and deletion confirmation.
+          if 'def create_recurring_details_keyboard(task_id):' not in text:
+              details_keyboard = '''\n\ndef create_recurring_details_keyboard(task_id):\n    markup = types.InlineKeyboardMarkup(row_width=2)\n    markup.add(\n        types.InlineKeyboardButton(\"🗑️ Удалить\", callback_data=f\"delete_recurring_ask_{task_id}\"),\n        types.InlineKeyboardButton(\"◀️ К списку\", callback_data=\"recurring_list\")\n    )\n    return markup\n'''
               marker = 'def create_confirm_delete_all_recurring_keyboard():'
               if marker not in text:
-                  raise SystemExit('Could not find recurring confirmation keyboard marker')
-              text = text.replace(marker, confirm + '\n' + marker, 1)
+                  raise SystemExit('Could not find recurring keyboard marker')
+              text = text.replace(marker, details_keyboard + '\n' + marker, 1)
+          else:
+              text = text.replace(\n                  'callback_data=f"delete_recurring_{task_id}"',\n                  'callback_data=f"delete_recurring_ask_{task_id}"',\n                  1\n              )
 
-          # 6) Put the detail helper into bot.py as well, so it is never missing from imports.
-          if 'def show_recurring_details(user_id, task_id' not in text:\n              details = r'''\n\ndef show_recurring_details(user_id, task_id, message_id=None):\n    tasks = get_recurring_tasks(user_id)\n    task = next((t for t in tasks if t[0] == task_id), None)\n    if not task:\n        text = \"❌ Повторяющееся дело не найдено.\"\n        if message_id:\n            bot.edit_message_text(text, user_id, message_id)\n        else:\n            bot.send_message(user_id, text)\n        return\n\n    (_, task_text, recurrence_type, recurrence_days_json,\n     reminder_time, remind_before, start_date, end_date, is_active) = task\n\n    names = {\n        'daily': 'каждый день',\n        'weekdays': 'по будням',\n        'weekends': 'по выходным',\n        'weekly': 'еженедельно',\n        'monthly': 'ежемесячно',\n        'none': 'без повтора'\n    }\n    recurrence_text = names.get(recurrence_type, recurrence_type)\n\n    try:\n        days = json.loads(recurrence_days_json) if recurrence_days_json else []\n    except Exception:\n        days = []\n\n    if recurrence_type == 'weekly' and days:\n        day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']\n        selected = [day_names[d] for d in days if isinstance(d, int) and 0 <= d <= 6]\n        if selected:\n            recurrence_text += ': ' + ', '.join(selected)\n    elif recurrence_type == 'monthly' and days:\n        recurrence_text += ': ' + ', '.join(map(str, days))\n\n    start_text = format_date(start_date) if start_date else 'не указано'\n    end_text = format_date(end_date) if end_date else 'без ограничения'\n\n    if reminder_time and reminder_time != 'None':\n        reminder_text = reminder_time\n        if remind_before == 5:\n            reminder_text += ' (за 5 мин)'\n        elif remind_before == 15:\n            reminder_text += ' (за 15 мин)'\n        elif remind_before == 30:\n            reminder_text += ' (за 30 мин)'\n        elif remind_before == 60:\n            reminder_text += ' (за 1 час)'\n        elif remind_before == 120:\n            reminder_text += ' (за 2 часа)'\n        elif remind_before == 1440:\n            reminder_text += ' (за день)'\n    else:\n        reminder_text = 'без напоминания'\n\n    status_text = 'активно' if is_active else 'выключено'\n    text = (\n        f\"🔄 <b>{task_text}</b>\\n\\n\"\n        f\"📅 Начало: {start_text}\\n\"\n        f\"📅 До: {end_text}\\n\"\n        f\"🔁 Повтор: {recurrence_text}\\n\"\n        f\"⏰ Время: {reminder_text}\\n\"\n        f\"📌 Статус: {status_text}\"\n    )\n    markup = create_recurring_details_keyboard(task_id)\n    if message_id:\n        bot.edit_message_text(text, user_id, message_id, parse_mode='HTML', reply_markup=markup)\n    else:\n        bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)\n'''
+          if 'def create_confirm_delete_recurring_keyboard(task_id):' not in text:
+              confirm_keyboard = '''\n\ndef create_confirm_delete_recurring_keyboard(task_id):\n    markup = types.InlineKeyboardMarkup(row_width=2)\n    markup.add(\n        types.InlineKeyboardButton(\"✅ Да, удалить\", callback_data=f\"delete_recurring_confirm_{task_id}\"),\n        types.InlineKeyboardButton(\"❌ Нет\", callback_data=f\"recurring_view_{task_id}\")\n    )\n    return markup\n'''
               marker = 'def create_confirm_delete_all_recurring_keyboard():'
-              text = text.replace(marker, details + '\n' + marker, 1)
+              text = text.replace(marker, confirm_keyboard + '\n' + marker, 1)
 
-          # 7) Replace the old individual recurring delete handlers.
+          # 7. Put the recurring details renderer in bot.py itself.
+          if 'def show_recurring_details(user_id, task_id' not in text:
+              show_details = '''\n\ndef show_recurring_details(user_id, task_id, message_id=None):\n    tasks = get_recurring_tasks(user_id)\n    task = next((t for t in tasks if t[0] == task_id), None)\n    if not task:\n        text = \"❌ Повторяющееся дело не найдено.\"\n        if message_id:\n            bot.edit_message_text(text, user_id, message_id)\n        else:\n            bot.send_message(user_id, text)\n        return\n\n    (_, task_text, recurrence_type, recurrence_days_json,\n     reminder_time, remind_before, start_date, end_date, is_active) = task\n\n    names = {\n        'daily': 'каждый день',\n        'weekdays': 'по будням',\n        'weekends': 'по выходным',\n        'weekly': 'еженедельно',\n        'monthly': 'ежемесячно',\n        'none': 'без повтора'\n    }\n    recurrence_text = names.get(recurrence_type, recurrence_type)\n\n    try:\n        days = json.loads(recurrence_days_json) if recurrence_days_json else []\n    except Exception:\n        days = []\n\n    if recurrence_type == 'weekly' and days:\n        day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']\n        selected = [day_names[d] for d in days if isinstance(d, int) and 0 <= d <= 6]\n        if selected:\n            recurrence_text += ': ' + ', '.join(selected)\n    elif recurrence_type == 'monthly' and days:\n        recurrence_text += ': ' + ', '.join(map(str, days))\n\n    start_text = format_date(start_date) if start_date else 'не указано'\n    end_text = format_date(end_date) if end_date else 'без ограничения'\n\n    if reminder_time and reminder_time != 'None':\n        reminder_text = reminder_time\n        if remind_before == 5:\n            reminder_text += ' (за 5 мин)'\n        elif remind_before == 15:\n            reminder_text += ' (за 15 мин)'\n        elif remind_before == 30:\n            reminder_text += ' (за 30 мин)'\n        elif remind_before == 60:\n            reminder_text += ' (за 1 час)'\n        elif remind_before == 120:\n            reminder_text += ' (за 2 часа)'\n        elif remind_before == 1440:\n            reminder_text += ' (за день)'\n    else:\n        reminder_text = 'без напоминания'\n\n    status_text = 'активно' if is_active else 'выключено'\n    text = (\n        f\"🔄 <b>{task_text}</b>\\n\\n\"\n        f\"📅 Начало: {start_text}\\n\"\n        f\"📅 До: {end_text}\\n\"\n        f\"🔁 Повтор: {recurrence_text}\\n\"\n        f\"⏰ Время: {reminder_text}\\n\"\n        f\"📌 Статус: {status_text}\"\n    )\n    markup = create_recurring_details_keyboard(task_id)\n    if message_id:\n        bot.edit_message_text(text, user_id, message_id, parse_mode='HTML', reply_markup=markup)\n    else:\n        bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)\n'''
+              marker = 'def create_confirm_delete_all_recurring_keyboard():'
+              text = text.replace(marker, show_details + '\n' + marker, 1)
+
+          # 8. Replace callback handlers for an individual recurring task.
           handler_pattern = re.compile(\n              r"    elif data\.startswith\('recurring_view_'\):.*?    elif data == 'recurring_delete_all_ask':",\n              re.S\n          )
-          new_handlers = '''    elif data.startswith('recurring_view_'):\n        task_id = int(data.replace('recurring_view_', ''))\n        show_recurring_details(user_id, task_id, msg_id)\n        bot.answer_callback_query(call.id)\n\n    elif data.startswith('delete_recurring_ask_'):\n        task_id = int(data.replace('delete_recurring_ask_', ''))\n        bot.edit_message_text(\n            \"⚠️ Удалить это повторяющееся дело и его будущие экземпляры?\",\n            user_id,\n            msg_id,\n            reply_markup=create_confirm_delete_recurring_keyboard(task_id)\n        )\n        bot.answer_callback_query(call.id)\n\n    elif data.startswith('delete_recurring_confirm_'):\n        task_id = int(data.replace('delete_recurring_confirm_', ''))\n        deleted_ok, deleted_instances = delete_recurring_task(task_id, user_id)\n        tasks = get_recurring_tasks(user_id)\n        result_text = (\n            f\"✅ Повтор удалён.\\nБудущих экземпляров удалено: {deleted_instances}.\"\n            if deleted_ok else\n            \"❌ Повторяющееся дело не найдено.\"\n        )\n        if tasks:\n            bot.edit_message_text(\n                result_text,\n                user_id,\n                msg_id,\n                reply_markup=create_recurring_list_keyboard(tasks)\n            )\n        else:\n            bot.edit_message_text(\n                result_text,\n                user_id,\n                msg_id,\n                reply_markup=create_recurring_management_keyboard()\n            )\n        bot.answer_callback_query(call.id, \"✅ Готово\" if deleted_ok else \"❌ Не найдено\")\n\n    elif data == 'recurring_delete_all_ask':'''
+          new_handlers = '''    elif data.startswith('recurring_view_'):\n        task_id = int(data.replace('recurring_view_', ''))\n        show_recurring_details(user_id, task_id, msg_id)\n        bot.answer_callback_query(call.id)\n\n    elif data.startswith('delete_recurring_ask_'):\n        task_id = int(data.replace('delete_recurring_ask_', ''))\n        bot.edit_message_text(\n            \"⚠️ Удалить это повторяющееся дело и его будущие экземпляры?\",\n            user_id,\n            msg_id,\n            reply_markup=create_confirm_delete_recurring_keyboard(task_id)\n        )\n        bot.answer_callback_query(call.id)\n\n    elif data.startswith('delete_recurring_confirm_'):\n        task_id = int(data.replace('delete_recurring_confirm_', ''))\n        deleted_ok, deleted_instances = delete_recurring_task(task_id, user_id)\n        tasks = get_recurring_tasks(user_id)\n        if deleted_ok:\n            result_text = f\"✅ Повтор удалён.\\nБудущих экземпляров удалено: {deleted_instances}.\"\n        else:\n            result_text = \"❌ Повторяющееся дело не найдено.\"\n\n        if tasks:\n            bot.edit_message_text(\n                result_text,\n                user_id,\n                msg_id,\n                reply_markup=create_recurring_list_keyboard(tasks)\n            )\n        else:\n            bot.edit_message_text(\n                result_text,\n                user_id,\n                msg_id,\n                reply_markup=create_recurring_management_keyboard()\n            )\n        bot.answer_callback_query(call.id, \"✅ Готово\" if deleted_ok else \"❌ Не найдено\")\n\n    elif data == 'recurring_delete_all_ask':'''
           text, count = handler_pattern.subn(new_handlers, text, count=1)
-          if count != 1:\n              raise SystemExit('Could not replace recurring delete callback handlers')
+          if count != 1:
+              raise SystemExit('Could not replace recurring callbacks')
 
-          # 8) Update delete-all handler to report both counts.
+          # 9. Update delete-all confirmation result.
           all_pattern = re.compile(\n              r"    elif data == 'recurring_delete_all_confirm':\n.*?    elif data == 'recurring_manage':",\n              re.S\n          )
           all_replacement = '''    elif data == 'recurring_delete_all_confirm':\n        deleted_recurring, deleted_instances = delete_all_recurring_tasks(user_id)\n        bot.edit_message_text(\n            f\"✅ Удалено повторов: {deleted_recurring}\\nБудущих экземпляров удалено: {deleted_instances}.\",\n            user_id,\n            msg_id,\n            reply_markup=create_recurring_management_keyboard()\n        )\n        bot.answer_callback_query(call.id, \"✅ Всё удалено\")\n\n    elif data == 'recurring_manage':'''
           text, count = all_pattern.subn(all_replacement, text, count=1)
-          if count != 1:\n              raise SystemExit('Could not replace delete-all callback handler')
+          if count != 1:
+              raise SystemExit('Could not replace delete-all callback')
+
+          # 10. Keep only one copy of the recurring list function.
+          marker = 'def create_recurring_list_keyboard(tasks, page=0, tasks_per_page=5):'
+          occurrences = [m.start() for m in re.finditer(re.escape(marker), text)]
+          if len(occurrences) > 1:
+              first = occurrences[0]
+              second = occurrences[1]
+              text = text[:second] + text[text.find('\n# ========== РАБОТА С БАЗОЙ ==========', second):]
 
           path.write_text(text, encoding='utf-8')
-          print('Recurring deletion patch written')
+          print('Patch written successfully')
           PY
 
       - name: Check syntax
         run: python -m compileall -q .
 
-      - name: Commit patched bot
+      - name: Commit patched bot and remove workflow
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add bot.py
-          git diff --cached --exit-code && echo "No changes to commit" && exit 0
-          git commit -m "Fix recurring task deletion [skip ci]"
-          git push
-
-      - name: Remove temporary workflow
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm -f .github/workflows/fix-recurring-delete.yml
-          git commit -m "Remove temporary recurring deletion workflow [skip ci]"
+          git commit -m "Fix recurring task deletion [skip ci]"
           git push
