@@ -21,16 +21,16 @@ jobs:
           python-version: '3.13'
 
       - name: Apply patch
-        run: python tools/fix_recurring_delete2.py
+        run: python tools/fix_recurring_delete3.py
 
       - name: Check syntax
         run: python -m compileall -q .
 
-      - name: Commit patched bot and remove temporary files
+      - name: Commit patched bot and clean temporary files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add bot.py
-          git rm -f .github/workflows/fix-recurring-delete.yml tools/fix_recurring_delete.py tools/fix_recurring_delete2.py
+          git rm -f .github/workflows/fix-recurring-delete.yml tools/fix_recurring_delete.py tools/fix_recurring_delete2.py tools/fix_recurring_delete3.py
           git commit -m "Fix recurring task deletion [skip ci]"
           git push
