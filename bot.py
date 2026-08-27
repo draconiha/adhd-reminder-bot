@@ -285,6 +285,37 @@ def create_recurring_keyboard():
     )
     return markup
 
+def create_recurring_duration_keyboard():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+
+    markup.add(
+        types.InlineKeyboardButton(
+            "♾️ Без окончания",
+            callback_data="duration_none"
+        ),
+        types.InlineKeyboardButton(
+            "📅 На неделю",
+            callback_data="duration_week"
+        ),
+        types.InlineKeyboardButton(
+            "📆 На месяц",
+            callback_data="duration_month"
+        ),
+        types.InlineKeyboardButton(
+            "🗓️ На 3 месяца",
+            callback_data="duration_3months"
+        )
+    )
+
+    markup.add(
+        types.InlineKeyboardButton(
+            "◀️ Отмена",
+            callback_data="duration_cancel"
+        )
+    )
+
+    return markup
+
 def create_days_of_week_keyboard(selected_days=None):
     if selected_days is None:
         selected_days = []
@@ -1295,7 +1326,7 @@ def handle_message(message):
         numbers = sorted(list(set(numbers)))
         temp = user_temp_data[user_id]
         temp['recurrence_days'] = numbers
-        temp['action'] = 'set_recurring_time'
+        temp['action'] = 'select_recurring_duration'
         days_text = ', '.join(map(str, numbers))
         bot.send_message(user_id, f"🔄 <b>{temp['task_text']}</b>\n\n📅 Числа месяца: {days_text}\n\nНа какое время запланировать повтор?",
                          parse_mode='HTML', reply_markup=create_reminder_time_keyboard(user_id))
@@ -1647,8 +1678,10 @@ def callback_handler(call):
                     temp.get('recurrence_days', []),
                     temp.get('reminder_time', '09:00'),
                     remind_before,
-                    temp['date']
+                    temp['date'],
+                    temp.get('end_date')
                 )
+                
 
                 del user_temp_data[user_id]
 
@@ -1758,6 +1791,77 @@ def callback_handler(call):
         date = data.replace('recur_', '')
         user_temp_data[user_id] = {'date': date, 'action': 'awaiting_recurring_text'}
         bot.send_message(user_id, f"Что нужно повторять {format_date(date)}?")
+        bot.answer_callback_query(call.id)
+
+        elif data.startswith('duration_'):
+
+        if user_id not in user_temp_data:
+            bot.answer_callback_query(
+                call.id,
+                "❌ Ошибка: данные не найдены"
+            )
+            return
+
+        temp = user_temp_data[user_id]
+
+        if data == 'duration_cancel':
+            del user_temp_data[user_id]
+
+            bot.send_message(
+                user_id,
+                "❌ Создание дела отменено.",
+                reply_markup=create_main_keyboard()
+            )
+
+            bot.answer_callback_query(call.id)
+            return
+
+        start_date = datetime.datetime.strptime(
+            temp['date'],
+            "%Y-%m-%d"
+        ).date()
+
+        if data == 'duration_none':
+            end_date = None
+
+        elif data == 'duration_week':
+            end_date = start_date + datetime.timedelta(days=7)
+
+        elif data == 'duration_month':
+            end_date = start_date + datetime.timedelta(days=30)
+
+        elif data == 'duration_3months':
+            end_date = start_date + datetime.timedelta(days=90)
+
+        else:
+            bot.answer_callback_query(call.id)
+            return
+
+        temp['end_date'] = (
+            end_date.strftime("%Y-%m-%d")
+            if end_date
+            else None
+        )
+
+        temp['action'] = 'set_recurring_time'
+
+        duration_text = {
+            'duration_none': '♾️ Без окончания',
+            'duration_week': '📅 На неделю',
+            'duration_month': '📆 На месяц',
+            'duration_3months': '🗓️ На 3 месяца'
+        }.get(data, '')
+
+        bot.edit_message_text(
+            f"🔄 <b>{temp['task_text']}</b>\n\n"
+            f"Повтор: {duration_text}\n\n"
+            f"На какое время запланировать повтор?",
+            user_id,
+            msg_id,
+            parse_mode='HTML',
+            reply_markup=create_reminder_time_keyboard(user_id)
+        )
+
         bot.answer_callback_query(call.id)
 
     elif data.startswith('type_'):
