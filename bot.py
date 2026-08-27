@@ -1793,7 +1793,76 @@ def callback_handler(call):
         bot.send_message(user_id, f"Что нужно повторять {format_date(date)}?")
         bot.answer_callback_query(call.id)
 
-        elif data.startswith('duration_'):
+            elif data.startswith('duration_'):
+        if user_id not in user_temp_data:
+            bot.answer_callback_query(call.id, "❌ Данные создания дела не найдены")
+            return
+
+        temp = user_temp_data[user_id]
+
+        # Отмена
+        if data == 'duration_cancel':
+            del user_temp_data[user_id]
+
+            bot.edit_message_text(
+                "❌ Создание повторяющегося дела отменено.",
+                user_id,
+                msg_id,
+                parse_mode='HTML',
+                reply_markup=create_main_keyboard()
+            )
+
+            bot.answer_callback_query(call.id)
+            return
+
+        # Дата начала повторения
+        start_date = datetime.datetime.strptime(
+            temp['date'],
+            "%Y-%m-%d"
+        ).date()
+
+        # Определяем дату окончания
+        if data == 'duration_none':
+            end_date = None
+            duration_text = "♾️ Без окончания"
+
+        elif data == 'duration_week':
+            end_date = start_date + datetime.timedelta(days=7)
+            duration_text = "📅 На неделю"
+
+        elif data == 'duration_month':
+            end_date = start_date + datetime.timedelta(days=30)
+            duration_text = "📆 На месяц"
+
+        elif data == 'duration_3months':
+            end_date = start_date + datetime.timedelta(days=90)
+            duration_text = "🗓️ На 3 месяца"
+
+        else:
+            bot.answer_callback_query(call.id)
+            return
+
+        # Сохраняем дату окончания
+        temp['end_date'] = (
+            end_date.strftime("%Y-%m-%d")
+            if end_date
+            else None
+        )
+
+           elif data.startswith('type_'):
+        recur_type = data.replace('type_', '')
+
+        if recur_type == 'cancel':
+            if user_id in user_temp_data:
+                del user_temp_data[user_id]
+
+            bot.send_message(
+                user_id,
+                "❌ Отменено",
+                reply_markup=create_main_keyboard()
+            )
+            bot.answer_callback_query(call.id)
+            return
 
         if user_id not in user_temp_data:
             bot.answer_callback_query(
@@ -1804,200 +1873,311 @@ def callback_handler(call):
 
         temp = user_temp_data[user_id]
 
-        if data == 'duration_cancel':
-            del user_temp_data[user_id]
+        if recur_type == 'none':
+            temp['action'] = 'set_task_time'
 
             bot.send_message(
                 user_id,
-                "❌ Создание дела отменено.",
-                reply_markup=create_main_keyboard()
+                f"✅ Окей!\n\n"
+                f"📝 <b>{temp['task_text']}</b>\n\n"
+                f"На какое время запланировать?",
+                parse_mode='HTML',
+                reply_markup=create_reminder_time_keyboard(user_id)
             )
 
-            bot.answer_callback_query(call.id)
-            return
-
-        start_date = datetime.datetime.strptime(
-            temp['date'],
-            "%Y-%m-%d"
-        ).date()
-
-        if data == 'duration_none':
-            end_date = None
-
-        elif data == 'duration_week':
-            end_date = start_date + datetime.timedelta(days=7)
-
-        elif data == 'duration_month':
-            end_date = start_date + datetime.timedelta(days=30)
-
-        elif data == 'duration_3months':
-            end_date = start_date + datetime.timedelta(days=90)
-
-        else:
-            bot.answer_callback_query(call.id)
-            return
-
-        temp['end_date'] = (
-            end_date.strftime("%Y-%m-%d")
-            if end_date
-            else None
-        )
-
-        temp['action'] = 'set_recurring_time'
-
-        duration_text = {
-            'duration_none': '♾️ Без окончания',
-            'duration_week': '📅 На неделю',
-            'duration_month': '📆 На месяц',
-            'duration_3months': '🗓️ На 3 месяца'
-        }.get(data, '')
-
-        bot.edit_message_text(
-            f"🔄 <b>{temp['task_text']}</b>\n\n"
-            f"Повтор: {duration_text}\n\n"
-            f"На какое время запланировать повтор?",
-            user_id,
-            msg_id,
-            parse_mode='HTML',
-            reply_markup=create_reminder_time_keyboard(user_id)
-        )
-
-        bot.answer_callback_query(call.id)
-
-    elif data.startswith('type_'):
-        recur_type = data.replace('type_', '')
-        if recur_type == 'cancel':
-            if user_id in user_temp_data:
-                del user_temp_data[user_id]
-            bot.send_message(user_id, "❌ Отменено", reply_markup=create_main_keyboard())
-            bot.answer_callback_query(call.id)
-            return
-        if user_id not in user_temp_data:
-            bot.answer_callback_query(call.id, "❌ Ошибка: данные не найдены")
-            return
-        temp = user_temp_data[user_id]
-        if recur_type == 'none':
-            temp['action'] = 'set_task_time'
-            bot.send_message(user_id, f"✅ Окей!\n\n📝 <b>{temp['task_text']}</b>\n\nНа какое время запланировать?",
-                           parse_mode='HTML', reply_markup=create_reminder_time_keyboard(user_id))
         elif recur_type in ['daily', 'weekdays', 'weekends']:
             temp['recurrence_type'] = recur_type
             temp['recurrence_days'] = []
-            temp['action'] = 'set_recurring_time'
-            bot.send_message(user_id, f"🔄 <b>{temp['task_text']}</b>\n\nНа какое время запланировать повтор?",
-                           parse_mode='HTML', reply_markup=create_reminder_time_keyboard(user_id))
+            temp['action'] = 'select_recurring_duration'
+
+            bot.send_message(
+                user_id,
+                f"🔄 <b>{temp['task_text']}</b>\n\n"
+                f"Как долго повторять дело?",
+                parse_mode='HTML',
+                reply_markup=create_recurring_duration_keyboard()
+            )
+
         elif recur_type == 'weekly':
             temp['recurrence_type'] = 'weekly'
             temp['action'] = 'select_weekly_days'
             temp['selected_days'] = []
-            bot.send_message(user_id, "Выбери дни недели для повтора:", reply_markup=create_days_of_week_keyboard())
+
+            bot.send_message(
+                user_id,
+                "Выбери дни недели для повтора:",
+                reply_markup=create_days_of_week_keyboard()
+            )
+
         elif recur_type == 'monthly':
             temp['recurrence_type'] = 'monthly'
             temp['action'] = 'enter_monthly_days'
-            bot.send_message(user_id, "Введи числа месяца через запятую (например: 5, 10, 15):")
+
+            bot.send_message(
+                user_id,
+                "Введи числа месяца через запятую "
+                "(например: 5, 10, 15):"
+            )
+
         bot.answer_callback_query(call.id)
+
 
     elif data.startswith('weekday_'):
         day_code = data.replace('weekday_', '')
+
         if user_id not in user_temp_data:
             bot.answer_callback_query(call.id)
             return
+
         temp = user_temp_data[user_id]
+
         if temp.get('action') == 'select_weekly_days':
             selected_days = temp.get('selected_days', [])
+
             if day_code in selected_days:
                 selected_days.remove(day_code)
             else:
                 selected_days.append(day_code)
+
             temp['selected_days'] = selected_days
-            days_names = {'mon': 'Пн', 'tue': 'Вт', 'wed': 'Ср', 'thu': 'Чт', 'fri': 'Пт', 'sat': 'Сб', 'sun': 'Вс'}
-            selected_text = ', '.join([days_names[d] for d in sorted(selected_days)]) if selected_days else "Не выбрано"
+
+            days_names = {
+                'mon': 'Пн',
+                'tue': 'Вт',
+                'wed': 'Ср',
+                'thu': 'Чт',
+                'fri': 'Пт',
+                'sat': 'Сб',
+                'sun': 'Вс'
+            }
+
+            selected_text = (
+                ', '.join(
+                    [days_names[d] for d in sorted(selected_days)]
+                )
+                if selected_days
+                else "Не выбрано"
+            )
+
             try:
                 bot.edit_message_text(
-                    f"Выбери дни недели для повтора:\n\nВыбрано: {selected_text}",
-                    user_id, msg_id,
-                    reply_markup=create_days_of_week_keyboard(selected_days)
+                    f"Выбери дни недели для повтора:\n\n"
+                    f"Выбрано: {selected_text}",
+                    user_id,
+                    msg_id,
+                    reply_markup=create_days_of_week_keyboard(
+                        selected_days
+                    )
                 )
             except Exception as e:
-                logger.error(f"Ошибка обновления выбора дней недели: {e}")
+                logger.error(
+                    f"Ошибка обновления выбора дней недели: {e}"
+                )
+
         bot.answer_callback_query(call.id)
+
 
     elif data == 'weekdays_done':
         if user_id not in user_temp_data:
             bot.answer_callback_query(call.id)
             return
+
         temp = user_temp_data[user_id]
+
         if temp.get('action') == 'select_weekly_days':
             selected_days = temp.get('selected_days', [])
+
             if not selected_days:
-                bot.send_message(user_id, "❌ Нужно выбрать хотя бы один день!")
+                bot.send_message(
+                    user_id,
+                    "❌ Нужно выбрать хотя бы один день!"
+                )
                 bot.answer_callback_query(call.id)
                 return
-            day_map = {'mon': 0, 'tue': 1, 'wed': 2, 'thu': 3, 'fri': 4, 'sat': 5, 'sun': 6}
-            recurrence_days = [day_map[code] for code in selected_days]
+
+            day_map = {
+                'mon': 0,
+                'tue': 1,
+                'wed': 2,
+                'thu': 3,
+                'fri': 4,
+                'sat': 5,
+                'sun': 6
+            }
+
+            recurrence_days = [
+                day_map[code]
+                for code in selected_days
+            ]
+
             temp['recurrence_days'] = recurrence_days
-            temp['action'] = 'set_recurring_time'
-            bot.send_message(user_id, f"🔄 <b>{temp['task_text']}</b>\n\nНа какое время запланировать повтор?",
-                           parse_mode='HTML', reply_markup=create_reminder_time_keyboard(user_id))
+
+            # После выбора дней сначала спрашиваем длительность
+            temp['action'] = 'select_recurring_duration'
+
+            bot.send_message(
+                user_id,
+                f"🔄 <b>{temp['task_text']}</b>\n\n"
+                f"Как долго повторять дело?",
+                parse_mode='HTML',
+                reply_markup=create_recurring_duration_keyboard()
+            )
+
         bot.answer_callback_query(call.id)
+
 
     elif data.startswith('recurring_view_'):
         task_id = int(data.replace('recurring_view_', ''))
-        show_recurring_details(user_id, task_id, msg_id)
+
+        show_recurring_details(
+            user_id,
+            task_id,
+            msg_id
+        )
+
         bot.answer_callback_query(call.id)
+
 
     elif data.startswith('delete_recurring_ask_'):
-        task_id = int(data.replace('delete_recurring_ask_', ''))
-        bot.edit_message_text("⚠️ Удалить это повторяющееся дело и все его невыполненные экземпляры?", user_id, msg_id, reply_markup=create_confirm_delete_recurring_keyboard(task_id))
+        task_id = int(
+            data.replace('delete_recurring_ask_', '')
+        )
+
+        bot.edit_message_text(
+            "⚠️ Удалить это повторяющееся дело "
+            "и все его невыполненные экземпляры?",
+            user_id,
+            msg_id,
+            reply_markup=create_confirm_delete_recurring_keyboard(
+                task_id
+            )
+        )
+
         bot.answer_callback_query(call.id)
 
+
     elif data.startswith('delete_recurring_confirm_'):
-        task_id = int(data.replace('delete_recurring_confirm_', ''))
-        deleted_ok, deleted_instances = delete_recurring_task(task_id, user_id)
+        task_id = int(
+            data.replace('delete_recurring_confirm_', '')
+        )
+
+        deleted_ok, deleted_instances = delete_recurring_task(
+            task_id,
+            user_id
+        )
+
         tasks = get_recurring_tasks(user_id)
+
         if deleted_ok:
-            result_text = f"✅ Повтор удалён. Невыполненных экземпляров удалено: {deleted_instances}."
+            result_text = (
+                f"✅ Повтор удалён. "
+                f"Невыполненных экземпляров удалено: "
+                f"{deleted_instances}."
+            )
         else:
             result_text = "❌ Повторяющееся дело не найдено."
+
         if tasks:
-            bot.edit_message_text(result_text, user_id, msg_id, reply_markup=create_recurring_list_keyboard(tasks))
+            bot.edit_message_text(
+                result_text,
+                user_id,
+                msg_id,
+                reply_markup=create_recurring_list_keyboard(tasks)
+            )
         else:
-            bot.edit_message_text(result_text, user_id, msg_id, reply_markup=create_recurring_management_keyboard())
-        bot.answer_callback_query(call.id, "✅ Готово" if deleted_ok else "❌ Не найдено")
+            bot.edit_message_text(
+                result_text,
+                user_id,
+                msg_id,
+                reply_markup=create_recurring_management_keyboard()
+            )
+
+        bot.answer_callback_query(
+            call.id,
+            "✅ Готово" if deleted_ok else "❌ Не найдено"
+        )
+
 
     elif data == 'recurring_delete_all_ask':
         tasks = get_recurring_tasks(user_id)
+
         if not tasks:
-            bot.answer_callback_query(call.id, "❌ Нет повторяющихся дел")
+            bot.answer_callback_query(
+                call.id,
+                "❌ Нет повторяющихся дел"
+            )
             return
+
         markup = create_confirm_delete_all_recurring_keyboard()
-        bot.edit_message_text("⚠️ Удалить ВСЕ повторяющиеся дела?", user_id, msg_id, reply_markup=markup)
+
+        bot.edit_message_text(
+            "⚠️ Удалить ВСЕ повторяющиеся дела?",
+            user_id,
+            msg_id,
+            reply_markup=markup
+        )
+
         bot.answer_callback_query(call.id)
+
 
     elif data == 'recurring_delete_all_confirm':
-        deleted_recurring, deleted_instances = delete_all_recurring_tasks(user_id)
-        result_text = f"✅ Удалено повторов: {deleted_recurring}. Невыполненных экземпляров удалено: {deleted_instances}."
-        bot.edit_message_text(result_text, user_id, msg_id, reply_markup=create_recurring_management_keyboard())
-        bot.answer_callback_query(call.id, "✅ Всё удалено")
+        deleted_recurring, deleted_instances = (
+            delete_all_recurring_tasks(user_id)
+        )
+
+        result_text = (
+            f"✅ Удалено повторов: {deleted_recurring}. "
+            f"Невыполненных экземпляров удалено: "
+            f"{deleted_instances}."
+        )
+
+        bot.edit_message_text(
+            result_text,
+            user_id,
+            msg_id,
+            reply_markup=create_recurring_management_keyboard()
+        )
+
+        bot.answer_callback_query(
+            call.id,
+            "✅ Всё удалено"
+        )
+
 
     elif data == 'recurring_manage':
-        bot.edit_message_text("🔁 Управление повторяющимися делами:", user_id, msg_id,
-                            reply_markup=create_recurring_management_keyboard())
+        bot.edit_message_text(
+            "🔁 Управление повторяющимися делами:",
+            user_id,
+            msg_id,
+            reply_markup=create_recurring_management_keyboard()
+        )
+
         bot.answer_callback_query(call.id)
+
 
     elif data == 'recurring_list':
         tasks = get_recurring_tasks(user_id)
+
         if not tasks:
-            bot.edit_message_text("📭 Нет повторяющихся дел.", user_id, msg_id)
+            bot.edit_message_text(
+                "📭 Нет повторяющихся дел.",
+                user_id,
+                msg_id
+            )
         else:
-            bot.edit_message_text("📋 Список повторяющихся дел:", user_id, msg_id,
-                                reply_markup=create_recurring_list_keyboard(tasks))
+            bot.edit_message_text(
+                "📋 Список повторяющихся дел:",
+                user_id,
+                msg_id,
+                reply_markup=create_recurring_list_keyboard(tasks)
+            )
+
         bot.answer_callback_query(call.id)
+
 
     # Если ничего не подошло
     else:
         bot.answer_callback_query(call.id)
-
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
     logger.info("🤖 СДВГ-напоминалка запущена!")
