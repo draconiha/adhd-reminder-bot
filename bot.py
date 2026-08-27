@@ -1793,7 +1793,7 @@ def callback_handler(call):
         bot.send_message(user_id, f"Что нужно повторять {format_date(date)}?")
         bot.answer_callback_query(call.id)
 
-            elif data.startswith('duration_'):
+    elif data.startswith('duration_'):
         if user_id not in user_temp_data:
             bot.answer_callback_query(call.id, "❌ Данные создания дела не найдены")
             return
