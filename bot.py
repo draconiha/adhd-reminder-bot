@@ -1849,8 +1849,8 @@ def callback_handler(call):
             else None
         )
 
-           elif data.startswith('type_'):
-        recur_type = data.replace('type_', '')
+        elif data.startswith('type_'):
+            recur_type = data.replace('type_', '')
 
         if recur_type == 'cancel':
             if user_id in user_temp_data:
