@@ -1733,7 +1733,7 @@ def callback_handler(call):
             temp.get('end_date')
                 )
 
-                del user_temp_data[user_id]
+        del user_temp_data[user_id]
 
                 bot.send_message(
                     user_id,
