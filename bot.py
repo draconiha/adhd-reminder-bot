@@ -1618,7 +1618,8 @@ def callback_handler(call):
                 temp.get('recurrence_days', []),
                 temp.get('reminder_time', '09:00'),
                 remind_before,
-                temp['date']
+                temp['date'],
+                temp.get('end_date')
             )
 
             del user_temp_data[user_id]
@@ -1720,15 +1721,16 @@ def callback_handler(call):
                     reply_markup=create_main_keyboard()
                 )
 
-            elif temp.get('action') == 'set_recurring_time':
-                add_recurring_task(
-                    user_id,
-                    temp['task_text'],
-                    temp['recurrence_type'],
-                    temp.get('recurrence_days', []),
-                    None,
-                    0,
-                    temp['date']
+    elif temp.get('action') == 'set_recurring_time':
+        add_recurring_task(
+            user_id,
+            temp['task_text'],
+            temp['recurrence_type'],
+            temp.get('recurrence_days', []),
+            None,
+            0,
+            temp['date'],
+            temp.get('end_date')
                 )
 
                 del user_temp_data[user_id]
