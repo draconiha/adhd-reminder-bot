@@ -1731,15 +1731,15 @@ def callback_handler(call):
             0,
             temp['date'],
             temp.get('end_date')
-                )
+        )
 
         del user_temp_data[user_id]
 
-                bot.send_message(
-                    user_id,
-                    "🔄 Повторяющееся дело добавлено! Без напоминания.",
-                    reply_markup=create_main_keyboard()
-                )
+        bot.send_message(
+            user_id,
+            "🔄 Повторяющееся дело добавлено! Без напоминания.",
+            reply_markup=create_main_keyboard()
+        )
 
         bot.answer_callback_query(call.id)
 
