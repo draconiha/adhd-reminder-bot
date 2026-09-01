@@ -1327,9 +1327,18 @@ def handle_message(message):
         temp = user_temp_data[user_id]
         temp['recurrence_days'] = numbers
         temp['action'] = 'select_recurring_duration'
+
         days_text = ', '.join(map(str, numbers))
-        bot.send_message(user_id, f"🔄 <b>{temp['task_text']}</b>\n\n📅 Числа месяца: {days_text}\n\nНа какое время запланировать повтор?",
-                         parse_mode='HTML', reply_markup=create_reminder_time_keyboard(user_id))
+
+        bot.send_message(
+            user_id,
+            f"🔄 <b>{temp['task_text']}</b>\n\n"
+            f"📅 Числа месяца: {days_text}\n\n"
+            f"Как долго повторять дело?",
+            parse_mode='HTML',
+            reply_markup=create_recurring_duration_keyboard()
+        )
+
         return
 
     # Остальные обработчики
