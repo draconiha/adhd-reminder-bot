@@ -1860,7 +1860,7 @@ def callback_handler(call):
             else None
         )
 
-            temp['action'] = 'set_recurring_time'
+        temp['action'] = 'set_recurring_time'
 
         bot.edit_message_text(
             f"🔄 <b>{temp['task_text']}</b>\n\n"
