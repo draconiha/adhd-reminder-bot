@@ -1860,6 +1860,20 @@ def callback_handler(call):
             else None
         )
 
+            temp['action'] = 'set_recurring_time'
+
+        bot.edit_message_text(
+            f"🔄 <b>{temp['task_text']}</b>\n\n"
+            f"Повтор: {duration_text}\n\n"
+            f"⏰ На какое время запланировать повтор?",
+            user_id,
+            msg_id,
+            parse_mode='HTML',
+            reply_markup=create_reminder_time_keyboard(user_id)
+        )
+
+        bot.answer_callback_query(call.id)
+        
     elif data.startswith('type_'):
         recur_type = data.replace('type_', '')
 
