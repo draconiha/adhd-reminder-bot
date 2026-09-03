@@ -1734,28 +1734,6 @@ def callback_handler(call):
                     reply_markup=create_main_keyboard()
                 )
 
-    elif temp.get('action') == 'set_recurring_time':
-        add_recurring_task(
-            user_id,
-            temp['task_text'],
-            temp['recurrence_type'],
-            temp.get('recurrence_days', []),
-            None,
-            0,
-            temp['date'],
-            temp.get('end_date')
-        )
-
-        del user_temp_data[user_id]
-
-        bot.send_message(
-            user_id,
-            "🔄 Повторяющееся дело добавлено! Без напоминания.",
-            reply_markup=create_main_keyboard()
-        )
-
-        bot.answer_callback_query(call.id)
-
     elif data == 'time_cancel':
         if user_id in user_temp_data:
             del user_temp_data[user_id]
