@@ -1382,6 +1382,10 @@ def callback_handler(call):
     user_id = call.from_user.id
     data = call.data
     msg_id = call.message.message_id
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        logger.warning(f"Не удалось подтвердить нажатие кнопки: {e}")
 
     # ========== КАЛЕНДАРЬ ==========
     if data.startswith('calendar_'):
