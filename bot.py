@@ -1394,6 +1394,69 @@ def callback_handler(call):
         month = int(parts[2])
         show_calendar(user_id, msg_id, year, month)
         bot.answer_callback_query(call.id)
+
+    elif data == 'all_tasks':
+        conn = sqlite3.connect('tasks.db')
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT id, task, date, is_done, reminder_time, remind_before
+            FROM tasks
+            WHERE user_id = ?
+            ORDER BY date ASC, reminder_time ASC
+            """,
+            (user_id,)
+        )
+
+        tasks = cursor.fetchall()
+        conn.close()
+
+        if not tasks:
+            bot.edit_message_text(
+                "📭 Делишек пока нет.",
+                user_id,
+                msg_id,
+                reply_markup=create_main_keyboard()
+            )
+            return
+
+        text = "📋 <b>Все делишки:</b>\n\n"
+
+        current_date = None
+
+        for tid, task, date, done, reminder_time, remind_before in tasks:
+            if date != current_date:
+                current_date = date
+                text += f"\n📅 <b>{format_date(date)}</b>\n"
+
+            if done:
+                text += f"• <s>{task}</s> ✅\n"
+            else:
+                time_info = (
+                    f" ({reminder_time})"
+                    if reminder_time and reminder_time != 'None'
+                    else ""
+                )
+                text += f"• {task}{time_info}\n"
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(
+                "🏠 В меню",
+                callback_data="main_menu"
+            )
+        )
+
+        bot.edit_message_text(
+            text,
+            user_id,
+            msg_id,
+            parse_mode='HTML',
+            reply_markup=markup
+        )
+
+        return
     
     elif data.startswith('day_'):
         date = data.replace('day_', '')
