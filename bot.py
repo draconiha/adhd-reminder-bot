@@ -1730,6 +1730,22 @@ def callback_handler(call):
             reply_markup=create_settings_keyboard()
         )
         bot.answer_callback_query(call.id)
+
+    elif data.startswith('stats_'):
+        if data == 'stats_today':
+            show_today_stats(user_id, msg_id)
+
+        elif data == 'stats_week':
+            show_week_stats(user_id, msg_id)
+
+        elif data == 'stats_month':
+            show_month_stats(user_id, msg_id)
+
+        elif data == 'stats_all':
+            show_user_stats(user_id, msg_id)
+
+        bot.answer_callback_query(call.id)
+        
     # ========== НАПОМИНАНИЯ ==========
     elif data == 'before_none':
         if user_id not in user_temp_data:
