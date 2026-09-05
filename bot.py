@@ -155,25 +155,27 @@ def update_user_setting(user_id, setting_name, setting_value):
     conn.commit()
     conn.close()
 
-# ========== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ РАЗБИВКИ ДЛИННЫХ СООБЩЕНИЙ ==========
-def split_and_send(chat_id, text, parse_mode=None, reply_markup=None, max_len=3500):
-    """Разбивает длинное сообщение на части и отправляет их по очереди."""
+# ========== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ДЛИННЫХ СООБЩЕНИЙ ==========
+def split_text(text, max_len=3500):
+    """Разбивает длинный текст по переносам строк."""
     if len(text) <= max_len:
-        bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
-        return
+        return [text]
+
     parts = []
+
     while len(text) > max_len:
-        # Ищем последний перенос строки в пределах max_len
         split_at = text.rfind('\n', 0, max_len)
+
         if split_at == -1:
             split_at = max_len
+
         parts.append(text[:split_at])
         text = text[split_at:].lstrip()
-    parts.append(text)
-    for i, part in enumerate(parts):
-        # reply_markup отправляем только с последней частью
-        markup = reply_markup if i == len(parts)-1 else None
-        bot.send_message(chat_id, part, parse_mode=parse_mode, reply_markup=markup)
+
+    if text:
+        parts.append(text)
+
+    return parts
 
 # ========== КЛАВИАТУРЫ ==========
 def create_main_keyboard():
@@ -1419,7 +1421,75 @@ def callback_handler(call):
                 msg_id,
                 reply_markup=create_main_keyboard()
             )
+            bot.answer_callback_query(call.id)
             return
+
+        text = "📋 <b>Все делишки:</b>\n\n"
+        current_date = None
+
+        for tid, task, date, done, reminder_time, remind_before in tasks:
+            if date != current_date:
+                current_date = date
+                text += f"\n📅 <b>{format_date(date)}</b>\n"
+
+            if done:
+                text += f"• <s>{task}</s> ✅\n"
+            else:
+                time_info = (
+                    f" ({reminder_time})"
+                    if reminder_time and reminder_time != 'None'
+                    else ""
+                )
+
+                text += f"• {task}{time_info}\n"
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(
+                "🏠 В меню",
+                callback_data="main_menu"
+            )
+        )
+
+        parts = split_text(text)
+
+        # Первую часть показываем вместо текущего сообщения
+        bot.edit_message_text(
+            parts[0],
+            user_id,
+            msg_id,
+            parse_mode='HTML'
+        )
+
+        # Остальные части отправляем отдельными сообщениями
+        for i, part in enumerate(parts[1:]):
+            if i == len(parts[1:]) - 1:
+                bot.send_message(
+                    user_id,
+                    part,
+                    parse_mode='HTML',
+                    reply_markup=markup
+                )
+            else:
+                bot.send_message(
+                    user_id,
+                    part,
+                    parse_mode='HTML'
+                )
+
+        # Если всё поместилось в одну часть,
+        # кнопку "В меню" добавляем к текущему сообщению
+        if len(parts) == 1:
+            bot.edit_message_text(
+                parts[0],
+                user_id,
+                msg_id,
+                parse_mode='HTML',
+                reply_markup=markup
+            )
+
+        bot.answer_callback_query(call.id)
+        return
 
         text = "📋 <b>Все делишки:</b>\n\n"
 
