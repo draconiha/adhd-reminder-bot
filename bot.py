@@ -177,6 +177,21 @@ def split_text(text, max_len=3500):
 
     return parts
 
+# ========== ОТПРАВКА ДЛИННЫХ СООБЩЕНИЙ ==========
+def split_and_send(chat_id, text, parse_mode=None, reply_markup=None, max_len=3500):
+    """Разбивает длинное сообщение на части и отправляет их по очереди."""
+    parts = split_text(text, max_len)
+
+    for i, part in enumerate(parts):
+        markup = reply_markup if i == len(parts) - 1 else None
+
+        bot.send_message(
+            chat_id,
+            part,
+            parse_mode=parse_mode,
+            reply_markup=markup
+        )
+
 # ========== КЛАВИАТУРЫ ==========
 def create_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
