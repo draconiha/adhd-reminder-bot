@@ -1153,7 +1153,7 @@ def show_day_tasks(user_id, date_str, edit_message_id=None):
     markup.row(
         types.InlineKeyboardButton("➕ Плюс дело", callback_data=f"add_{date_str}"),
         types.InlineKeyboardButton("🔄 Повтор", callback_data=f"recur_{date_str}"),
-        types.InlineKeyboardButton("🗑️ Минус вайб", callback_data=f"clear_ask_{date_str}"),
+        types.InlineKeyboardButton("🏳️ Сегодня пас", callback_data=f"clear_ask_{date_str}"),
     )
     markup.row(
         types.InlineKeyboardButton("◀️ Назад к календарю", callback_data="back_calendar"),
@@ -1305,9 +1305,80 @@ def stats_command(message):
 @bot.message_handler(commands=['пользователи'])
 def users_command(message):
     user_id = message.chat.id
+
     if user_id not in ADMIN_IDS:
         return
-    send_users_with_tasks(user_id)
+
+    conn = sqlite3.connect('tasks.db')
+    cursor = conn.cursor()
+
+    users = set()
+
+    cursor.execute("SELECT DISTINCT user_id FROM tasks")
+    for (uid,) in cursor.fetchall():
+        users.add(uid)
+
+    cursor.execute("SELECT DISTINCT user_id FROM recurring_tasks")
+    for (uid,) in cursor.fetchall():
+        users.add(uid)
+
+    cursor.execute("SELECT DISTINCT user_id FROM user_settings")
+    for (uid,) in cursor.fetchall():
+        users.add(uid)
+
+    conn.close()
+
+    if not users:
+        bot.send_message(
+            user_id,
+            "👥 Пока нет пользователей с делами."
+        )
+        return
+
+    lines = ["👥 <b>Пользователи с делами:</b>\n"]
+
+    for uid in sorted(users):
+        if uid == user_id:
+            continue
+
+        try:
+            chat = bot.get_chat(uid)
+
+            name = chat.first_name or ""
+            if chat.last_name:
+                name += f" {chat.last_name}"
+
+            username = (
+                f"@{chat.username}"
+                if chat.username
+                else "без ника"
+            )
+
+            if not name:
+                name = "Без имени"
+
+            lines.append(
+                f"• <code>{uid}</code> — "
+                f"{name} ({username})"
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Не удалось получить данные пользователя {uid}: {e}"
+            )
+
+            lines.append(
+                f"• <code>{uid}</code> — "
+                f"данные недоступны"
+            )
+
+    lines.append(f"\nВсего пользователей: <b>{len(users)}</b>")
+
+    split_and_send(
+        user_id,
+        "\n".join(lines),
+        parse_mode='HTML'
+    )
 
 @bot.message_handler(func=lambda m: True)
 def handle_message(message):
@@ -2330,10 +2401,26 @@ def callback_handler(call):
 
         bot.answer_callback_query(call.id)
 
+    elif data == 'admin_stats_short':
+        if user_id not in ADMIN_IDS:
+            bot.answer_callback_query(call.id)
+            return
+
+        send_activity_report(user_id)
+        bot.answer_callback_query(call.id)
+
+    elif data == 'admin_stats_detailed':
+        if user_id not in ADMIN_IDS:
+            bot.answer_callback_query(call.id)
+            return
+
+        send_detailed_activity_report(user_id)
+        bot.answer_callback_query(call.id)
 
     # Если ничего не подошло
     else:
         bot.answer_callback_query(call.id)
+
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
     logger.info("🤖 СДВГ-напоминалка запущена!")
