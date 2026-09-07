@@ -180,7 +180,13 @@ def split_text(text, max_len=3500):
 # ========== КЛАВИАТУРЫ ==========
 def create_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add('📅 Календарь', '➕ Плюс дело', '📋 Что сегодня?', '⚙️ Настройки')
+    markup.add(
+        '📅 Календарь',
+        '➕ Плюс дело',
+        '📋 Что сегодня?',
+        '⚙️ Настройки',
+        '📖 Справка'
+    )
     return markup
 
 def create_calendar_keyboard(user_id, year=None, month=None):
@@ -1428,6 +1434,25 @@ def handle_message(message):
             f"⚙️ Твои настройки:\n⏰ Время по умолчанию: {settings['default_reminder_time']}\n"
             f"⏱️ Напоминать заранее: {settings['default_remind_before']} мин",
             reply_markup=create_settings_keyboard())
+
+    elif text == '📖 Справка':
+        bot.send_message(
+            user_id,
+            "📖 <b>Как пользоваться ботом</b>\n\n"
+            "📅 <b>Календарь</b> — посмотреть дела по дням, "
+            "перенести дело на другую дату или создать повторяющееся дело.\n\n"
+            "➕ <b>Плюс дело</b> — быстро добавить дело на сегодня.\n\n"
+            "📋 <b>Что сегодня?</b> — посмотреть все дела на сегодня.\n\n"
+            "⚙️ <b>Настройки</b> — настроить время напоминаний "
+            "и управлять повторяющимися делами.\n\n"
+            "🏳️ <b>Сегодня пас</b> — удалить все дела на выбранный день.\n\n"
+            "💡 <b>Повторяющиеся дела</b> можно настроить так, "
+            "чтобы они повторялись каждый день, по будням, "
+            "по выходным, по выбранным дням недели или в определённые "
+            "числа месяца.\n\n"
+            "Если что-то непонятно — ты всегда можешь открыть эту справку снова 💕",
+            parse_mode='HTML'
+        )
     elif user_id in user_states and user_states[user_id].get('action') == 'add_today':
         today = get_current_time().strftime('%Y-%m-%d')
         user_temp_data[user_id] = {'task_text': text, 'date': today, 'action': 'set_task_time'}
