@@ -1401,6 +1401,7 @@ def show_task_details(user_id, task_id, message_id=None):
     markup = types.InlineKeyboardMarkup(row_width=2)
     if not is_done:
         markup.add(types.InlineKeyboardButton("✅ Выполнить", callback_data=f"done_{task_id}"))
+    markup.add(types.InlineKeyboardButton("✏️ Изменить", callback_data=f"edit_{task_id}"))
     markup.add(types.InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_one_{task_id}"))
     markup.add(types.InlineKeyboardButton("📅 Перенести", callback_data=f"move_{task_id}"))
     markup.add(types.InlineKeyboardButton("◀️ Назад", callback_data=f"day_{date_str}"))
@@ -1628,6 +1629,29 @@ def handle_message(message):
             del user_states[user_id]
             bot.send_message(user_id, "📥 Добавила в кучу дел!", reply_markup=create_main_keyboard())
             show_task_pile(user_id)
+            return
+
+        if setup_action == 'edit_task_text':
+            task_id = user_states[user_id].get('task_id')
+            task = get_task_by_id(task_id)
+
+            if not task or task[0] != user_id:
+                del user_states[user_id]
+                bot.send_message(user_id, "❌ Не смогла найти это дело.")
+                return
+
+            conn = sqlite3.connect('tasks.db')
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE tasks SET task=? WHERE id=? AND user_id=?",
+                (text, task_id, user_id)
+            )
+            conn.commit()
+            conn.close()
+
+            del user_states[user_id]
+            bot.send_message(user_id, "✏️ Название дела изменено!")
+            show_task_details(user_id, task_id)
             return
 
     # Проверяем, не находится ли пользователь в состоянии ввода чисел для месячного повтора
@@ -1968,6 +1992,28 @@ def callback_handler(call):
         task_id = int(data.replace('task_', ''))
         show_task_details(user_id, task_id, msg_id)
         safe_answer_callback(call)
+
+    elif data.startswith('edit_'):
+        task_id = int(data.replace('edit_', ''))
+        task = get_task_by_id(task_id)
+
+        if not task or task[0] != user_id:
+            safe_answer_callback(call, "❌ Дело не найдено")
+            return
+
+        user_states[user_id] = {
+            'action': 'edit_task_text',
+            'task_id': task_id
+        }
+
+        bot.send_message(
+            user_id,
+            f"✏️ Сейчас дело называется:\n<b>{task[1]}</b>\n\n"
+            "Напиши новое название:",
+            parse_mode='HTML'
+        )
+        safe_answer_callback(call)
+        return
 
     elif data.startswith('done_'):
         task_id = int(data.replace('done_', ''))
