@@ -11,6 +11,7 @@
 ```powershell
 git clone https://github.com/draconiha/adhd-reminder-bot.git adhd-reminder-bot-test
 cd adhd-reminder-bot-test
+git checkout dev
 ```
 
 Создай рядом с `bot.py` файл `config.py`:
