@@ -1274,6 +1274,10 @@ def daily_summary_worker():
             current_time = now.strftime('%H:%M')
             today_str = now.strftime('%Y-%m-%d')
 
+            if current_time == '00:00' and now.second < 20:
+                time.sleep(20)
+                now = get_current_time()
+
             conn = sqlite3.connect('tasks.db')
             cursor = conn.cursor()
             cursor.execute("SELECT user_id, default_reminder_time, setup_done, daily_summary_sent_date FROM user_settings")
@@ -2310,6 +2314,8 @@ def callback_handler(call):
                     "✅ Дело добавлено! Без напоминания.",
                     reply_markup=create_main_keyboard()
                 )
+
+            safe_answer_callback(call, "Без напоминания")
 
     elif data == 'time_cancel':
         if user_id in user_temp_data:
