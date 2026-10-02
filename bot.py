@@ -115,10 +115,16 @@ def add_missing_columns():
             cursor.execute("ALTER TABLE user_settings ADD COLUMN daily_summary_sent_date TEXT")
         if 'evening_report_sent_date' not in columns:
             cursor.execute("ALTER TABLE user_settings ADD COLUMN evening_report_sent_date TEXT")
+        if 'evening_report_sent_date' not in columns:
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN evening_report_sent_date TEXT")
         cursor.execute("PRAGMA table_info(tasks)")
         columns = [column[1] for column in cursor.fetchall()]
         if 'reminder_sent' not in columns:
             cursor.execute("ALTER TABLE tasks ADD COLUMN reminder_sent INTEGER DEFAULT 0")
+        if 'advance_reminder_sent' not in columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN advance_reminder_sent INTEGER DEFAULT 0")
+        if 'exact_reminder_sent' not in columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN exact_reminder_sent INTEGER DEFAULT 0")
         if 'recurring_id' not in columns:
             cursor.execute("ALTER TABLE tasks ADD COLUMN recurring_id INTEGER")
         cursor.execute("PRAGMA table_info(user_activity)")
@@ -154,7 +160,7 @@ def get_user_settings(user_id):
     conn = sqlite3.connect('tasks.db')
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT default_reminder_time, default_remind_before, setup_done, wake_time, sleep_time, daily_summary_sent_date "
+        "SELECT default_reminder_time, default_remind_before, setup_done, wake_time, sleep_time, daily_summary_sent_date, evening_report_sent_date "
         "FROM user_settings WHERE user_id=?",
         (user_id,)
     )
@@ -162,7 +168,7 @@ def get_user_settings(user_id):
     if not s:
         cursor.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
         conn.commit()
-        s = ('09:00', 0, 0, None, None, None)
+        s = ('09:00', 0, 0, None, None, None, None)
     conn.close()
     return {
         'default_reminder_time': s[0],
@@ -170,7 +176,8 @@ def get_user_settings(user_id):
         'setup_done': s[2],
         'wake_time': s[3],
         'sleep_time': s[4],
-        'daily_summary_sent_date': s[5]
+        'daily_summary_sent_date': s[5],
+        'evening_report_sent_date': s[6]
     }
 
 def update_user_setting(user_id, setting_name, setting_value):
