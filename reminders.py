@@ -5,6 +5,7 @@ import logging
 import builtins
 import sys
 from zoneinfo import ZoneInfo
+from telebot import types
 
 
 def get_current_time():
@@ -23,7 +24,7 @@ def check_reminders(bot, logger):
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT id, user_id, task, reminder_time, remind_before
+                SELECT id, user_id, task, date, reminder_time, remind_before
                 FROM tasks
                 WHERE date = ? AND is_done = 0 AND reminder_sent = 0
                 AND reminder_time IS NOT NULL AND reminder_time != 'None'
@@ -31,7 +32,7 @@ def check_reminders(bot, logger):
             tasks_today = cursor.fetchall()
 
             cursor.execute("""
-                SELECT id, user_id, task, reminder_time, remind_before
+                SELECT id, user_id, task, date, reminder_time, remind_before
                 FROM tasks
                 WHERE date = ? AND is_done = 0 AND reminder_sent = 0
                 AND remind_before = 1440
@@ -41,18 +42,24 @@ def check_reminders(bot, logger):
 
             tasks = tasks_today + tasks_tomorrow
 
-            for task_id, user_id, task_text, reminder_time, remind_before in tasks:
+            for task_id, user_id, task_text, task_date, reminder_time, remind_before in tasks:
                 try:
                     reminder_datetime = datetime.datetime.strptime(
-                        f"{current_date} {reminder_time}",
+                        f"{task_date} {reminder_time}",
                         "%Y-%m-%d %H:%M"
                     ).replace(tzinfo=ZoneInfo("Europe/Moscow"))
 
-                    if remind_before > 0 and remind_before != 1440:
+                    if remind_before > 0:
                         reminder_datetime -= datetime.timedelta(minutes=remind_before)
 
                     if now >= reminder_datetime:
-                        if remind_before > 0:
+                        if task_date == current_date and reminder_datetime < now and remind_before == 0:
+                            text = (
+                                f"🔴 <b>Время уже прошло</b>\n\n"
+                                f"{task_text}\n\n"
+                                f"Планировалось на {reminder_time}."
+                            )
+                        elif remind_before > 0:
                             if remind_before < 60:
                                 text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез {remind_before} минут ({reminder_time})"
                             elif remind_before == 60:
@@ -60,14 +67,34 @@ def check_reminders(bot, logger):
                             elif remind_before == 120:
                                 text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез 2 часа ({reminder_time})"
                             elif remind_before == 1440:
-                                text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЗавтра в {reminder_time}"
+                                text = f"⏰ <b>Завтра дело!</b>\n\n{task_text}\n\nЗавтра в {reminder_time}"
                             else:
                                 text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез {remind_before} минут ({reminder_time})"
                         else:
-                            text = f"⏰ <b>Пора делать!</b>\n\n{task_text}\n\nСейчас время: {reminder_time}"
+                            text = (
+                                f"⏰ <b>Пора делать!</b>\n\n"
+                                f"{task_text}\n\n"
+                                f"Сейчас планировалось на {reminder_time}."
+                            )
 
-                        bot.send_message(user_id, text, parse_mode='HTML')
-                        logger.info(f"Отправлено уведомление для задачи {task_id} пользователю {user_id}")
+                        markup = types.InlineKeyboardMarkup()
+                        markup.add(
+                            types.InlineKeyboardButton(
+                                "✅ Сделано",
+                                callback_data=f"done_{task_id}"
+                            )
+                        )
+
+                        bot.send_message(
+                            user_id,
+                            text,
+                            parse_mode='HTML',
+                            reply_markup=markup
+                        )
+                        logger.info(
+                            f"Отправлено уведомление для задачи {task_id} "
+                            f"пользователю {user_id}"
+                        )
 
                         cursor.execute(
                             "UPDATE tasks SET reminder_sent = 1 WHERE id = ?",
@@ -76,7 +103,9 @@ def check_reminders(bot, logger):
                         conn.commit()
 
                 except Exception as e:
-                    logger.error(f"Ошибка при обработке уведомления для задачи {task_id}: {e}")
+                    logger.error(
+                        f"Ошибка при обработке уведомления для задачи {task_id}: {e}"
+                    )
 
             conn.close()
             time.sleep(30)
