@@ -1435,6 +1435,7 @@ def start_command(message):
                      "📅 <b>Календарь</b> — просмотр дел по дням\n"
                      "➕ <b>Плюс дело</b> — быстро добавить дело на сегодня\n"
                      "📋 <b>Что сегодня?</b> — список дел на сегодня\n"
+                     "📥 <b>Куча дел</b> — сложить дело без даты\n"
                      "⚙️ <b>Настройки</b> — изменить время напоминаний\n\n"
                      "<b>✨ Новые функции:</b>\n"
                      "• <b>Повторяющиеся дела</b> — создай дело один раз, и оно будет появляться каждый день, по будням или в выбранные дни\n"
@@ -1669,7 +1670,8 @@ def handle_message(message):
         settings = get_user_settings(user_id)
         bot.send_message(user_id,
             f"⚙️ Твои настройки:\n⏰ Время по умолчанию: {settings['default_reminder_time']}\n"
-            f"⏱️ Напоминать заранее: {settings['default_remind_before']} мин",
+            f"⏱️ Напоминать заранее: {settings['default_remind_before']} мин\n"
+            f"📋 В это время бот также присылает план на сегодня.",
             reply_markup=create_settings_keyboard())
 
     elif text == '📖 Справка':
@@ -1680,7 +1682,7 @@ def handle_message(message):
             "перенести дело на другую дату или создать повторяющееся дело.\n\n"
             "➕ <b>Плюс дело</b> — быстро добавить дело на сегодня.\n\n"
             "📥 <b>Куча дел</b> — сохранить дело без даты и разобрать позже.\n\n"
-            "📋 <b>Что сегодня?</b> — посмотреть все дела на сегодня.\n\n
+            "📋 <b>Что сегодня?</b> — посмотреть все дела на сегодня.\n\n"
             "⚙️ <b>Настройки</b> — настроить время напоминаний "
             "и управлять повторяющимися делами.\n\n"
             "🏳️ <b>Сегодня пас</b> — удалить все дела на выбранный день.\n\n"
@@ -1727,7 +1729,7 @@ def callback_handler(call):
     safe_answer_callback(call)
 
     # ========== КУЧА ДЕЛ ==========
-    elif data == 'pile_list':
+    if data == 'pile_list':
         show_task_pile(user_id, msg_id)
         safe_answer_callback(call)
         return
@@ -2174,19 +2176,8 @@ def callback_handler(call):
 
             bot.send_message(
                 user_id,
-                "✅ Дело добавлено! Без предварительного напоминания.",
+                ("🔴 Время уже прошло — уведомление придёт сразу." if temp.get('date') == get_current_time().strftime('%Y-%m-%d') and temp.get('reminder_time') and temp.get('reminder_time') < get_current_time().strftime('%H:%M') else "✅ Дело добавлено! Без предварительного напоминания."),
                 reply_markup=create_main_keyboard()
-            )
-
-        elif temp.get('action') == 'set_task_time':
-            bot.edit_message_text(
-                f"📝 <b>{temp['task_text']}</b>\n\n"
-                f"Время: {time_value}\n\n"
-                f"За сколько напомнить?",
-                user_id,
-                msg_id,
-                parse_mode='HTML',
-                reply_markup=create_remind_before_keyboard(user_id)
             )
 
         elif temp.get('action') == 'set_recurring_time':
@@ -2258,7 +2249,7 @@ def callback_handler(call):
 
                 bot.send_message(
                     user_id,
-                    "✅ Дело добавлено!",
+                    ("🔴 Время уже прошло — уведомление придёт сразу." if temp.get('date') == get_current_time().strftime('%Y-%m-%d') and temp.get('reminder_time') and temp.get('reminder_time') < get_current_time().strftime('%H:%M') else "✅ Дело добавлено!"),
                     reply_markup=create_main_keyboard()
                 )
 
@@ -2347,6 +2338,20 @@ def callback_handler(call):
                 f"📥 <b>{temp['task_text']}</b>\n\n"
                 f"Дата: {format_date(temp['date'])}\n"
                 f"Время: {time_value}\n\n"
+                f"За сколько напомнить?",
+                user_id,
+                msg_id,
+                parse_mode='HTML',
+                reply_markup=create_remind_before_keyboard(user_id)
+            )
+
+        elif temp.get('action') == 'set_task_time':
+            overdue_note = ""
+            if temp.get('date') == get_current_time().strftime('%Y-%m-%d') and time_value < get_current_time().strftime('%H:%M'):
+                overdue_note = "\n\n🔴 Это время уже прошло — бот сразу пришлёт уведомление."
+            bot.edit_message_text(
+                f"📝 <b>{temp['task_text']}</b>\n\n"
+                f"Время: {time_value}{overdue_note}\n\n"
                 f"За сколько напомнить?",
                 user_id,
                 msg_id,
