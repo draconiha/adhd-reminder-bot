@@ -113,6 +113,8 @@ def add_missing_columns():
             cursor.execute("ALTER TABLE user_settings ADD COLUMN sleep_time TEXT")
         if 'daily_summary_sent_date' not in columns:
             cursor.execute("ALTER TABLE user_settings ADD COLUMN daily_summary_sent_date TEXT")
+        if 'evening_report_sent_date' not in columns:
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN evening_report_sent_date TEXT")
         cursor.execute("PRAGMA table_info(tasks)")
         columns = [column[1] for column in cursor.fetchall()]
         if 'reminder_sent' not in columns:
@@ -1267,6 +1269,37 @@ def send_daily_summary(user_id, now=None):
     bot.send_message(user_id, text, parse_mode='HTML')
     logger.info(f"Отправлена ежедневная сводка пользователю {user_id}")
 
+def send_evening_report(user_id, now=None):
+    if now is None: now = get_current_time()
+    today_str = now.strftime('%Y-%m-%d')
+    conn = sqlite3.connect('tasks.db'); cursor = conn.cursor()
+    cursor.execute("SELECT task, is_done FROM tasks WHERE user_id=? AND date=?", (user_id, today_str))
+    tasks = cursor.fetchall(); conn.close()
+    total=len(tasks); done=sum(1 for _,d in tasks if d)
+    if done==0:
+        text="🌙 <b>Сегодня не получилось — такое бывает.</b>\n\nПопробуем завтра? 💚"
+    elif done==total:
+        text=f"🏆 <b>Молодец!</b>\n\nСегодня закрыты все дела — <b>{done}</b> из <b>{total}</b>.\nМожно выдыхать 💚"
+    else:
+        text=f"🌿 <b>Молодец, есть что-то сделанное!</b>\n\nСегодня выполнено <b>{done}</b> из <b>{total}</b> дел.\nОстальное можно попробовать завтра."
+    bot.send_message(user_id,text,parse_mode='HTML')
+
+def evening_report_worker():
+    while True:
+        try:
+            now=get_current_time(); current_time=now.strftime('%H:%M'); today_str=now.strftime('%Y-%m-%d')
+            if current_time!='21:00': time.sleep(20); continue
+            conn=sqlite3.connect('tasks.db'); cursor=conn.cursor()
+            cursor.execute("SELECT user_id, setup_done, evening_report_sent_date FROM user_settings")
+            for uid, setup_done, sent in cursor.fetchall():
+                if not setup_done or sent==today_str: continue
+                try:
+                    send_evening_report(uid,now)
+                    cursor.execute("UPDATE user_settings SET evening_report_sent_date=? WHERE user_id=?",(today_str,uid)); conn.commit()
+                except Exception as e: logger.error(f"Ошибка вечернего отчёта для {uid}: {e}")
+            conn.close(); time.sleep(60)
+        except Exception as e: logger.error(f"Ошибка evening report worker: {e}"); time.sleep(60)
+
 def daily_summary_worker():
     while True:
         try:
@@ -1346,9 +1379,12 @@ def show_day_tasks(user_id, date_str, edit_message_id=None):
 
     markup = types.InlineKeyboardMarkup(row_width=1)
     for tid, task, done, rtime, rbefore in tasks:
+        short = task[:18] + "..." if len(task) > 18 else task
         if not done:
-            short = task[:20] + "..." if len(task)>20 else task
-            markup.add(types.InlineKeyboardButton(f"🔧 {short}", callback_data=f"task_{tid}"))
+            markup.row(
+                types.InlineKeyboardButton(f"🔧 {short}", callback_data=f"task_{tid}"),
+                types.InlineKeyboardButton("✏️", callback_data=f"edit_{tid}")
+            )
     markup.row(
         types.InlineKeyboardButton("➕ Плюс дело", callback_data=f"add_{date_str}"),
         types.InlineKeyboardButton("🔄 Повтор", callback_data=f"recur_{date_str}"),
@@ -1601,6 +1637,16 @@ def handle_message(message):
 
     if user_id in user_states:
         setup_action = user_states[user_id].get('action')
+
+        if user_states[user_id].get('action') == 'edit_task_text':
+            task_id = user_states[user_id]['task_id']
+            conn = sqlite3.connect('tasks.db'); cursor = conn.cursor()
+            cursor.execute("UPDATE tasks SET task=?, reminder_sent=0, advance_reminder_sent=0, exact_reminder_sent=0 WHERE id=? AND user_id=?", (text, task_id, user_id))
+            conn.commit(); conn.close()
+            del user_states[user_id]
+            bot.send_message(user_id, "✏️ Название изменено!", reply_markup=create_main_keyboard())
+            show_task_details(user_id, task_id)
+            return
 
         if setup_action in ('setup_wake', 'setup_sleep'):
             if not re.fullmatch(r'([01]\d|2[0-3]):[0-5]\d', text):
@@ -1942,6 +1988,15 @@ def callback_handler(call):
     elif data.startswith('day_'):
         date = data.replace('day_', '')
 
+        if user_id in user_temp_data and user_temp_data[user_id].get('action') == 'edit_task_date':
+            task_id = user_temp_data[user_id]['edit_task_id']
+            conn = sqlite3.connect('tasks.db'); cursor = conn.cursor()
+            cursor.execute("UPDATE tasks SET date=?, reminder_sent=0, advance_reminder_sent=0, exact_reminder_sent=0 WHERE id=? AND user_id=?", (date, task_id, user_id))
+            conn.commit(); conn.close(); del user_temp_data[user_id]
+            bot.send_message(user_id, f"📅 Дата изменена на {format_date(date)}!", reply_markup=create_main_keyboard())
+            show_task_details(user_id, task_id)
+            safe_answer_callback(call, "Изменено"); return
+
         if user_id in user_temp_data and user_temp_data[user_id].get('action') == 'pile_set_date':
             temp = user_temp_data[user_id]
             temp['date'] = date
@@ -1996,24 +2051,56 @@ def callback_handler(call):
     elif data.startswith('edit_'):
         task_id = int(data.replace('edit_', ''))
         task = get_task_by_id(task_id)
-
         if not task or task[0] != user_id:
             safe_answer_callback(call, "❌ Дело не найдено")
             return
-
-        user_states[user_id] = {
-            'action': 'edit_task_text',
-            'task_id': task_id
-        }
-
-        bot.send_message(
-            user_id,
-            f"✏️ Сейчас дело называется:\n<b>{task[1]}</b>\n\n"
-            "Напиши новое название:",
-            parse_mode='HTML'
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("✏️ Название", callback_data=f"edit_text_{task_id}"),
+            types.InlineKeyboardButton("⏰ Время", callback_data=f"edit_time_{task_id}"),
+            types.InlineKeyboardButton("⏱️ Напоминание", callback_data=f"edit_before_{task_id}"),
+            types.InlineKeyboardButton("📅 Дата", callback_data=f"edit_date_{task_id}"),
+            types.InlineKeyboardButton("◀️ Назад", callback_data=f"task_{task_id}")
         )
+        bot.edit_message_text(f"✏️ <b>Изменить дело</b>\n\n{task[1]}", user_id, msg_id, parse_mode='HTML', reply_markup=markup)
         safe_answer_callback(call)
         return
+
+    elif data.startswith('edit_text_'):
+        task_id = int(data.replace('edit_text_', ''))
+        task = get_task_by_id(task_id)
+        if not task or task[0] != user_id:
+            safe_answer_callback(call, "❌ Дело не найдено"); return
+        user_states[user_id] = {'action':'edit_task_text','task_id':task_id}
+        bot.send_message(user_id, f"✏️ Сейчас: <b>{task[1]}</b>\n\nНапиши новое название:", parse_mode='HTML')
+        safe_answer_callback(call); return
+
+    elif data.startswith('edit_time_'):
+        task_id = int(data.replace('edit_time_', ''))
+        task = get_task_by_id(task_id)
+        if not task or task[0] != user_id:
+            safe_answer_callback(call, "❌ Дело не найдено"); return
+        user_temp_data[user_id] = {'edit_task_id':task_id,'action':'edit_task_time'}
+        bot.edit_message_text("⏰ Выбери новое время:", user_id, msg_id, reply_markup=create_reminder_time_keyboard(user_id))
+        safe_answer_callback(call); return
+
+    elif data.startswith('edit_before_'):
+        task_id = int(data.replace('edit_before_', ''))
+        task = get_task_by_id(task_id)
+        if not task or task[0] != user_id:
+            safe_answer_callback(call, "❌ Дело не найдено"); return
+        user_temp_data[user_id] = {'edit_task_id':task_id,'action':'edit_task_before'}
+        bot.edit_message_text("⏱️ За сколько напоминать заранее?", user_id, msg_id, reply_markup=create_remind_before_keyboard(user_id))
+        safe_answer_callback(call); return
+
+    elif data.startswith('edit_date_'):
+        task_id = int(data.replace('edit_date_', ''))
+        task = get_task_by_id(task_id)
+        if not task or task[0] != user_id:
+            safe_answer_callback(call, "❌ Дело не найдено"); return
+        user_temp_data[user_id] = {'edit_task_id':task_id,'action':'edit_task_date'}
+        bot.send_message(user_id, "📅 Выбери новую дату:", reply_markup=create_calendar_keyboard(user_id))
+        safe_answer_callback(call); return
 
     elif data.startswith('done_'):
         task_id = int(data.replace('done_', ''))
@@ -2274,6 +2361,15 @@ def callback_handler(call):
             temp = user_temp_data[user_id]
             temp['remind_before'] = remind_before
 
+            if temp.get('action') == 'edit_task_before':
+                task_id = temp['edit_task_id']
+                conn = sqlite3.connect('tasks.db'); cursor = conn.cursor()
+                cursor.execute("UPDATE tasks SET remind_before=?, reminder_sent=0, advance_reminder_sent=0, exact_reminder_sent=0 WHERE id=? AND user_id=?", (remind_before, task_id, user_id))
+                conn.commit(); conn.close(); del user_temp_data[user_id]
+                bot.send_message(user_id, "⏱️ Предварительное напоминание изменено!", reply_markup=create_main_keyboard())
+                show_task_details(user_id, task_id)
+                safe_answer_callback(call, "Изменено"); return
+
             if temp.get('action') == 'pile_set_task_time':
                 add_task_to_db(
                     user_id,
@@ -2376,6 +2472,14 @@ def callback_handler(call):
 
     elif data.startswith('time_'):
         time_value = data.replace('time_', '')
+        if user_id in user_temp_data and user_temp_data[user_id].get('action') == 'edit_task_time':
+            task_id = user_temp_data[user_id]['edit_task_id']
+            conn = sqlite3.connect('tasks.db'); cursor = conn.cursor()
+            cursor.execute("UPDATE tasks SET reminder_time=?, reminder_sent=0, advance_reminder_sent=0, exact_reminder_sent=0 WHERE id=? AND user_id=?", (time_value, task_id, user_id))
+            conn.commit(); conn.close(); del user_temp_data[user_id]
+            bot.send_message(user_id, "⏰ Время изменено!", reply_markup=create_main_keyboard())
+            show_task_details(user_id, task_id)
+            safe_answer_callback(call, "Изменено"); return
 
         if user_id not in user_temp_data:
             safe_answer_callback(call, "❌ Ошибка: данные не найдены")
@@ -2869,6 +2973,9 @@ if __name__ == "__main__":
     summary_thread = threading.Thread(target=daily_summary_worker)
     summary_thread.daemon = True
     summary_thread.start()
+    evening_thread = threading.Thread(target=evening_report_worker)
+    evening_thread.daemon = True
+    evening_thread.start()
 
     retry_delay = 5
     while True:
