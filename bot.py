@@ -228,6 +228,18 @@ def split_and_send(chat_id, text, parse_mode=None, reply_markup=None, max_len=35
         )
 
 # ========== КЛАВИАТУРЫ ==========
+RU_MONTHS = {
+    1: 'январь', 2: 'февраль', 3: 'март', 4: 'апрель',
+    5: 'май', 6: 'июнь', 7: 'июль', 8: 'август',
+    9: 'сентябрь', 10: 'октябрь', 11: 'ноябрь', 12: 'декабрь'
+}
+
+RU_MONTHS_GENITIVE = {
+    1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля',
+    5: 'мая', 6: 'июня', 7: 'июля', 8: 'августа',
+    9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'
+}
+
 def create_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add(
@@ -246,7 +258,7 @@ def create_calendar_keyboard(user_id, year=None, month=None):
     if month is None: month = now.month
 
     markup = types.InlineKeyboardMarkup(row_width=7)
-    month_name = calendar.month_name[month]
+    month_name = RU_MONTHS[month]
     header = f"{month_name} {year}"
 
     prev_month = month - 1 if month > 1 else 12
@@ -283,6 +295,12 @@ def create_calendar_keyboard(user_id, year=None, month=None):
     markup.row(
         types.InlineKeyboardButton("📅 Сегодня", callback_data=f"day_{today.strftime('%Y-%m-%d')}"),
         types.InlineKeyboardButton("📋 Все делишки", callback_data="all_tasks")
+    )
+    markup.row(
+        types.InlineKeyboardButton(
+            f"📋 Дела на {RU_MONTHS_GENITIVE[month]}",
+            callback_data=f"month_tasks_{year}_{month}"
+        )
     )
     return markup
 
@@ -666,6 +684,30 @@ def create_confirm_delete_all_recurring_keyboard():
 
 
 # ========== РАБОТА С БАЗОЙ ==========
+def get_tasks_by_month(user_id, year, month):
+    """Возвращает все дела пользователя за указанный месяц."""
+    conn = sqlite3.connect('tasks.db')
+    cursor = conn.cursor()
+    start_date = f"{year}-{month:02d}-01"
+    last_day = calendar.monthrange(year, month)[1]
+    end_date = f"{year}-{month:02d}-{last_day:02d}"
+    cursor.execute(
+        """
+        SELECT id, task, date, is_done, reminder_time, remind_before
+        FROM tasks
+        WHERE user_id=? AND date>=? AND date<=?
+        ORDER BY date ASC,
+                 CASE WHEN reminder_time IS NULL OR reminder_time='None' THEN 1 ELSE 0 END,
+                 reminder_time ASC,
+                 id ASC
+        """,
+        (user_id, start_date, end_date)
+    )
+    tasks = cursor.fetchall()
+    conn.close()
+    return tasks
+
+
 def get_tasks_by_date(user_id, date_str):
     conn = sqlite3.connect('tasks.db')
     cursor = conn.cursor()
@@ -1359,6 +1401,66 @@ def show_calendar(user_id, edit_message_id=None, year=None, month=None):
         )
         user_calendar_messages[user_id] = msg.message_id
 
+def show_month_tasks(user_id, year, month, edit_message_id=None):
+    """Показывает все дела выбранного месяца, сгруппированные по датам."""
+    tasks = get_tasks_by_month(user_id, year, month)
+    month_name = RU_MONTHS[month]
+
+    if not tasks:
+        text = f"📭 <b>Дел на {month_name} {year} пока нет.</b>"
+    else:
+        total = len(tasks)
+        done = sum(1 for _, _, _, is_done, _, _ in tasks)
+        text = (
+            f"📋 <b>Дела на {month_name} {year}</b>\n"
+            f"Всего: {total} · выполнено: {done}\n"
+        )
+        current_date = None
+        for _, task, date_str, is_done, reminder_time, remind_before in tasks:
+            if date_str != current_date:
+                current_date = date_str
+                try:
+                    d = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
+                    date_text = f"{d.day} {RU_MONTHS_GENITIVE[d.month]}"
+                except Exception:
+                    date_text = date_str
+                text += f"\n📅 <b>{date_text}</b>\n"
+            if is_done:
+                text += f"• <s>{task}</s> ✅\n"
+            else:
+                time_info = f" ({reminder_time})" if reminder_time and reminder_time != 'None' else ""
+                if remind_before:
+                    if remind_before < 60:
+                        time_info += f" ⏰ за {remind_before} мин"
+                    elif remind_before == 60:
+                        time_info += " ⏰ за 1 час"
+                    elif remind_before == 120:
+                        time_info += " ⏰ за 2 часа"
+                    elif remind_before == 1440:
+                        time_info += " ⏰ за день"
+                text += f"• {task}{time_info}\n"
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.row(
+        types.InlineKeyboardButton("◀️ К календарю", callback_data=f"calendar_{year}_{month}"),
+        types.InlineKeyboardButton("🏠 В меню", callback_data="main_menu")
+    )
+    parts = split_text(text)
+    if edit_message_id:
+        try:
+            bot.edit_message_text(parts[0], user_id, edit_message_id, parse_mode='HTML',
+                                  reply_markup=markup if len(parts) == 1 else None)
+        except Exception:
+            bot.send_message(user_id, parts[0], parse_mode='HTML')
+    else:
+        bot.send_message(user_id, parts[0], parse_mode='HTML',
+                         reply_markup=markup if len(parts) == 1 else None)
+    for part in parts[1:]:
+        bot.send_message(user_id, part, parse_mode='HTML')
+    if len(parts) > 1:
+        bot.send_message(user_id, "↩️", reply_markup=markup)
+
+
 def show_day_tasks(user_id, date_str, edit_message_id=None):
     tasks = get_tasks_by_date(user_id, date_str)
     formatted = format_date(date_str)
@@ -1854,6 +1956,17 @@ def callback_handler(call):
         return
 
     # ========== КАЛЕНДАРЬ ==========
+    if data.startswith('month_tasks_'):
+        parts = data.split('_')
+        if len(parts) != 4:
+            safe_answer_callback(call, "❌ Ошибка")
+            return
+        year = int(parts[2])
+        month = int(parts[3])
+        show_month_tasks(user_id, year, month, msg_id)
+        safe_answer_callback(call)
+        return
+
     if data.startswith('calendar_'):
         parts = data.split('_')
         year = int(parts[1])
