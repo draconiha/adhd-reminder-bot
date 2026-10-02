@@ -82,6 +82,12 @@ def init_db():
         action TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS task_pile (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        task TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
     conn.commit()
     conn.close()
     logger.info("База данных инициализирована")
@@ -98,6 +104,15 @@ def add_missing_columns():
             cursor.execute("ALTER TABLE user_settings ADD COLUMN auto_delete_done INTEGER DEFAULT 0")
         if 'notification_type' not in columns:
             cursor.execute("ALTER TABLE user_settings ADD COLUMN notification_type TEXT DEFAULT 'normal'")
+        if 'setup_done' not in columns:
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN setup_done INTEGER DEFAULT 0")
+            cursor.execute("UPDATE user_settings SET setup_done = 1")
+        if 'wake_time' not in columns:
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN wake_time TEXT")
+        if 'sleep_time' not in columns:
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN sleep_time TEXT")
+        if 'daily_summary_sent_date' not in columns:
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN daily_summary_sent_date TEXT")
         cursor.execute("PRAGMA table_info(tasks)")
         columns = [column[1] for column in cursor.fetchall()]
         if 'reminder_sent' not in columns:
@@ -136,14 +151,25 @@ def log_user_activity(user_id, action, username=None, first_name=None):
 def get_user_settings(user_id):
     conn = sqlite3.connect('tasks.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT default_reminder_time, default_remind_before FROM user_settings WHERE user_id=?", (user_id,))
+    cursor.execute(
+        "SELECT default_reminder_time, default_remind_before, setup_done, wake_time, sleep_time, daily_summary_sent_date "
+        "FROM user_settings WHERE user_id=?",
+        (user_id,)
+    )
     s = cursor.fetchone()
     if not s:
         cursor.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
         conn.commit()
-        s = ('09:00', 0)
+        s = ('09:00', 0, 0, None, None, None)
     conn.close()
-    return {'default_reminder_time': s[0], 'default_remind_before': s[1]}
+    return {
+        'default_reminder_time': s[0],
+        'default_remind_before': s[1],
+        'setup_done': s[2],
+        'wake_time': s[3],
+        'sleep_time': s[4],
+        'daily_summary_sent_date': s[5]
+    }
 
 def update_user_setting(user_id, setting_name, setting_value):
     allowed_settings = ['default_reminder_time', 'default_remind_before', 'theme', 'auto_delete_done', 'notification_type']
@@ -198,6 +224,7 @@ def create_main_keyboard():
     markup.add(
         '📅 Календарь',
         '➕ Плюс дело',
+        '📥 Куча дел',
         '📋 Что сегодня?',
         '⚙️ Настройки',
         '📖 Справка'
@@ -264,7 +291,7 @@ def create_settings_keyboard():
 def create_default_time_keyboard(user_id):
     settings = get_user_settings(user_id)
     default = settings['default_reminder_time']
-    times = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+    times = [f"{hour:02d}:00" for hour in range(24)]
     markup = types.InlineKeyboardMarkup(row_width=3)
     for i in range(0, len(times), 3):
         row = []
@@ -362,7 +389,7 @@ def create_reminder_time_keyboard(user_id=None):
         default = settings['default_reminder_time']
     else:
         default = "09:00"
-    times = ["09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00","18:00","19:00","20:00","21:00","22:00","23:00"]
+    times = [f"{hour:02d}:00" for hour in range(24)]
     markup = types.InlineKeyboardMarkup(row_width=3)
     for i in range(0, len(times), 3):
         row = []
@@ -698,6 +725,86 @@ def format_date(date_str):
         return f"{d.day} {months[d.month]} {d.year if d.year!=today.year else ''}".strip()
     except:
         return date_str
+
+# ========== КУЧА ДЕЛ ==========
+def add_task_to_pile(user_id, task_text):
+    conn = sqlite3.connect('tasks.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO task_pile (user_id, task) VALUES (?, ?)", (user_id, task_text))
+    pile_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return pile_id
+
+def get_task_pile(user_id):
+    conn = sqlite3.connect('tasks.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, task FROM task_pile WHERE user_id=? ORDER BY id ASC", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def delete_task_from_pile(pile_id, user_id):
+    conn = sqlite3.connect('tasks.db')
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM task_pile WHERE id=? AND user_id=?", (pile_id, user_id))
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+def create_task_pile_keyboard(tasks):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for pile_id, task_text in tasks:
+        short = task_text[:32] + "..." if len(task_text) > 32 else task_text
+        markup.add(types.InlineKeyboardButton(f"📌 {short}", callback_data=f"pile_view_{pile_id}"))
+    markup.row(
+        types.InlineKeyboardButton("➕ Добавить в кучу", callback_data="pile_add"),
+        types.InlineKeyboardButton("🏠 В меню", callback_data="main_menu")
+    )
+    return markup
+
+def show_task_pile(user_id, message_id=None):
+    tasks = get_task_pile(user_id)
+    if not tasks:
+        text = "📥 <b>Куча дел пуста</b>\n\nСюда можно складывать дела, которые пока не знаешь куда поставить. Разберём их позже 🌿"
+    else:
+        text = "📥 <b>Куча дел</b>\n\nЗдесь лежат дела без даты. Нажми на любое, чтобы поставить его в календарь.\n"
+        for i, (_, task_text) in enumerate(tasks, 1):
+            text += f"\n{i}. {task_text}"
+    markup = create_task_pile_keyboard(tasks)
+    if message_id:
+        try:
+            bot.edit_message_text(text, user_id, message_id, parse_mode='HTML', reply_markup=markup)
+        except Exception:
+            bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)
+    else:
+        bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)
+
+def show_pile_task_details(user_id, pile_id, message_id=None):
+    conn = sqlite3.connect('tasks.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT task FROM task_pile WHERE id=? AND user_id=?", (pile_id, user_id))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        text = "❌ Дело уже не найдено в куче."
+        if message_id:
+            bot.edit_message_text(text, user_id, message_id)
+        else:
+            bot.send_message(user_id, text)
+        return
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📅 Разобрать", callback_data=f"pile_schedule_{pile_id}"),
+        types.InlineKeyboardButton("🗑️ Удалить", callback_data=f"pile_delete_{pile_id}"),
+        types.InlineKeyboardButton("◀️ Назад", callback_data="pile_list")
+    )
+    text = f"📥 <b>{row[0]}</b>\n\nКуда его поставить?"
+    if message_id:
+        bot.edit_message_text(text, user_id, message_id, parse_mode='HTML', reply_markup=markup)
+    else:
+        bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)
 
 # ========== ПОВТОРЯЮЩИЕСЯ ЗАДАЧИ ==========
 def add_recurring_task(user_id, task_text, recurrence_type, recurrence_days, reminder_time, remind_before, start_date, end_date=None):
@@ -1112,14 +1219,81 @@ def send_users_with_tasks(admin_id):
         bot.send_message(admin_id, f"<code>{chunk}</code>", parse_mode='HTML')
     bot.send_message(admin_id, f"Всего: {len(users)} пользователей.")
 
-def daily_report_worker():
-    while True:
+def send_daily_summary(user_id, now=None):
+    if now is None:
         now = get_current_time()
-        # Проверяем 22:00 UTC с точностью до 10 секунд
-        if now.hour == 22 and now.minute == 0 and now.second < 10:
-            send_activity_report()
+
+    today_str = now.strftime('%Y-%m-%d')
+    conn = sqlite3.connect('tasks.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT task, is_done, reminder_time, remind_before
+        FROM tasks
+        WHERE user_id=? AND date=?
+        ORDER BY CASE WHEN reminder_time IS NULL OR reminder_time='None' THEN 1 ELSE 0 END,
+                 reminder_time ASC, id ASC
+        """,
+        (user_id, today_str)
+    )
+    tasks = cursor.fetchall()
+    conn.close()
+
+    if not tasks:
+        pile_count = len(get_task_pile(user_id))
+        extra = f"\n\n📥 В куче дел сейчас: <b>{pile_count}</b>." if pile_count else ""
+        text = "🌿 <b>Сегодня отдыхаем!</b>\n\nПланов нет — или ты забыл что-нибудь записать? 👀" + extra
+    else:
+        text = "🌞 <b>План на сегодня</b>\n\n"
+        for task_text, is_done, reminder_time, remind_before in tasks:
+            if is_done:
+                text += f"• <s>{task_text}</s> ✅\n"
+                continue
+            if reminder_time and reminder_time != 'None':
+                time_info = reminder_time
+                if remind_before:
+                    if remind_before < 60:
+                        time_info += f" · за {remind_before} мин"
+                    elif remind_before == 60:
+                        time_info += " · за 1 час"
+                    elif remind_before == 120:
+                        time_info += " · за 2 часа"
+                    elif remind_before == 1440:
+                        time_info += " · за день"
+                text += f"• <b>{time_info}</b> — {task_text}\n"
+            else:
+                text += f"• {task_text}\n"
+
+    bot.send_message(user_id, text, parse_mode='HTML')
+    logger.info(f"Отправлена ежедневная сводка пользователю {user_id}")
+
+def daily_summary_worker():
+    while True:
+        try:
+            now = get_current_time()
+            current_time = now.strftime('%H:%M')
+            today_str = now.strftime('%Y-%m-%d')
+
+            conn = sqlite3.connect('tasks.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id, default_reminder_time, setup_done, daily_summary_sent_date FROM user_settings")
+            users = cursor.fetchall()
+
+            for user_id, default_time, setup_done, sent_date in users:
+                if not setup_done or default_time != current_time or sent_date == today_str:
+                    continue
+                try:
+                    send_daily_summary(user_id, now)
+                    cursor.execute("UPDATE user_settings SET daily_summary_sent_date=? WHERE user_id=?", (today_str, user_id))
+                    conn.commit()
+                except Exception as e:
+                    logger.error(f"Ошибка ежедневной сводки для {user_id}: {e}")
+
+            conn.close()
+            time.sleep(20)
+        except Exception as e:
+            logger.error(f"Ошибка worker ежедневной сводки: {e}")
             time.sleep(60)
-        time.sleep(30)
 
 # ========== ОСНОВНЫЕ ФУНКЦИИ ОТОБРАЖЕНИЯ ==========
 def show_calendar(user_id, edit_message_id=None, year=None, month=None):
@@ -1243,6 +1417,19 @@ def start_command(message):
     username = message.from_user.username
     first_name = message.from_user.first_name
     log_user_activity(user_id, "start", username, first_name)
+
+    settings = get_user_settings(user_id)
+    if not settings['setup_done']:
+        user_states[user_id] = {'action': 'setup_wake'}
+        bot.send_message(
+            user_id,
+            "👋 Привет! Давай быстро настроим бота. Это займёт минуту.\n\n"
+            "Во сколько ты обычно просыпаешься?\n"
+            "Например: <b>08:00</b>",
+            parse_mode='HTML'
+        )
+        return
+
     bot.send_message(message.chat.id,
                      "👋 Привет! Я твоя СДВГ-напоминалка!\n\n"
                      "📅 <b>Календарь</b> — просмотр дел по дням\n"
@@ -1406,6 +1593,38 @@ def handle_message(message):
     user_id = message.chat.id
     text = message.text.strip()
 
+    if user_id in user_states:
+        setup_action = user_states[user_id].get('action')
+
+        if setup_action in ('setup_wake', 'setup_sleep'):
+            if not re.fullmatch(r'([01]\d|2[0-3]):[0-5]\d', text):
+                bot.send_message(user_id, "❌ Нужен формат ЧЧ:ММ, например <b>08:00</b> или <b>00:30</b>.", parse_mode='HTML')
+                return
+
+            if setup_action == 'setup_wake':
+                update_user_setting(user_id, 'wake_time', text)
+                user_states[user_id] = {'action': 'setup_sleep'}
+                bot.send_message(user_id, "А во сколько ты обычно ложишься спать?\nНапример: <b>00:30</b>", parse_mode='HTML')
+                return
+
+            update_user_setting(user_id, 'sleep_time', text)
+            update_user_setting(user_id, 'setup_done', 1)
+            del user_states[user_id]
+            bot.send_message(
+                user_id,
+                "✨ Готово! Теперь можно просто записывать дела.\n\nВремя подъёма и сна сохранены для будущих умных функций.",
+                parse_mode='HTML',
+                reply_markup=create_main_keyboard()
+            )
+            return
+
+        if setup_action == 'add_pile':
+            add_task_to_pile(user_id, text)
+            del user_states[user_id]
+            bot.send_message(user_id, "📥 Добавила в кучу дел!", reply_markup=create_main_keyboard())
+            show_task_pile(user_id)
+            return
+
     # Проверяем, не находится ли пользователь в состоянии ввода чисел для месячного повтора
     if user_id in user_temp_data and user_temp_data[user_id].get('action') == 'enter_monthly_days':
         # Обрабатываем ввод чисел
@@ -1441,6 +1660,9 @@ def handle_message(message):
     elif text == '➕ Плюс дело':
         user_states[user_id] = {'action': 'add_today'}
         bot.send_message(user_id, "Напиши, что нужно сделать сегодня:")
+    elif text == '📥 Куча дел':
+        user_states[user_id] = {'action': 'add_pile'}
+        bot.send_message(user_id, "Напиши дело — я положу его в кучу:")
     elif text == '📋 Что сегодня?':
         show_today_tasks(user_id)
     elif text == '⚙️ Настройки':
@@ -1457,7 +1679,8 @@ def handle_message(message):
             "📅 <b>Календарь</b> — посмотреть дела по дням, "
             "перенести дело на другую дату или создать повторяющееся дело.\n\n"
             "➕ <b>Плюс дело</b> — быстро добавить дело на сегодня.\n\n"
-            "📋 <b>Что сегодня?</b> — посмотреть все дела на сегодня.\n\n"
+            "📥 <b>Куча дел</b> — сохранить дело без даты и разобрать позже.\n\n"
+            "📋 <b>Что сегодня?</b> — посмотреть все дела на сегодня.\n\n
             "⚙️ <b>Настройки</b> — настроить время напоминаний "
             "и управлять повторяющимися делами.\n\n"
             "🏳️ <b>Сегодня пас</b> — удалить все дела на выбранный день.\n\n"
@@ -1490,15 +1713,62 @@ def handle_message(message):
         bot.send_message(user_id, f"✅ Добавил на сегодня!\n📝 <b>{text}</b>\nНа какое время?", parse_mode='HTML',
                          reply_markup=create_reminder_time_keyboard(user_id))
 
+def safe_answer_callback(call, text=None):
+    try:
+        bot.answer_callback_query(call.id, text=text)
+    except Exception as e:
+        logger.debug(f"Callback {call.id} уже подтверждён или устарел: {e}")
+
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     user_id = call.from_user.id
     data = call.data
     msg_id = call.message.message_id
-    try:
-        bot.answer_callback_query(call.id)
-    except Exception as e:
-        logger.warning(f"Не удалось подтвердить нажатие кнопки: {e}")
+    safe_answer_callback(call)
+
+    # ========== КУЧА ДЕЛ ==========
+    elif data == 'pile_list':
+        show_task_pile(user_id, msg_id)
+        safe_answer_callback(call)
+        return
+
+    elif data == 'pile_add':
+        user_states[user_id] = {'action': 'add_pile'}
+        bot.send_message(user_id, "Напиши дело — я положу его в кучу:")
+        safe_answer_callback(call)
+        return
+
+    elif data.startswith('pile_view_'):
+        pile_id = int(data.replace('pile_view_', ''))
+        show_pile_task_details(user_id, pile_id, msg_id)
+        safe_answer_callback(call)
+        return
+
+    elif data.startswith('pile_delete_'):
+        pile_id = int(data.replace('pile_delete_', ''))
+        deleted = delete_task_from_pile(pile_id, user_id)
+        show_task_pile(user_id, msg_id)
+        safe_answer_callback(call, "🗑️ Удалено" if deleted else "❌ Уже удалено")
+        return
+
+    elif data.startswith('pile_schedule_'):
+        pile_id = int(data.replace('pile_schedule_', ''))
+        conn = sqlite3.connect('tasks.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT task FROM task_pile WHERE id=? AND user_id=?", (pile_id, user_id))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            safe_answer_callback(call, "❌ Дело не найдено")
+            return
+        user_temp_data[user_id] = {
+            'pile_task_id': pile_id,
+            'task_text': row[0],
+            'action': 'pile_set_date'
+        }
+        bot.send_message(user_id, "📅 Выбери дату, куда поставить дело:", reply_markup=create_calendar_keyboard(user_id))
+        safe_answer_callback(call)
+        return
 
     # ========== КАЛЕНДАРЬ ==========
     if data.startswith('calendar_'):
@@ -1506,7 +1776,7 @@ def callback_handler(call):
         year = int(parts[1])
         month = int(parts[2])
         show_calendar(user_id, msg_id, year, month)
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data == 'all_tasks':
         conn = sqlite3.connect('tasks.db')
@@ -1532,7 +1802,7 @@ def callback_handler(call):
                 msg_id,
                 reply_markup=create_main_keyboard()
             )
-            bot.answer_callback_query(call.id)
+            safe_answer_callback(call)
             return
 
         text = "📋 <b>Все делишки:</b>\n\n"
@@ -1599,7 +1869,7 @@ def callback_handler(call):
                 reply_markup=markup
             )
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
         return
 
         text = "📋 <b>Все делишки:</b>\n\n"
@@ -1642,6 +1912,19 @@ def callback_handler(call):
     elif data.startswith('day_'):
         date = data.replace('day_', '')
 
+        if user_id in user_temp_data and user_temp_data[user_id].get('action') == 'pile_set_date':
+            temp = user_temp_data[user_id]
+            temp['date'] = date
+            temp['action'] = 'pile_set_task_time'
+            bot.send_message(
+                user_id,
+                f"📥 <b>{temp['task_text']}</b>\n\nДата: {format_date(date)}\nНа какое время?",
+                parse_mode='HTML',
+                reply_markup=create_reminder_time_keyboard(user_id)
+            )
+            safe_answer_callback(call)
+            return
+
         if user_id in user_temp_data and 'move_task_id' in user_temp_data[user_id]:
             task_id = user_temp_data[user_id]['move_task_id']
 
@@ -1664,7 +1947,7 @@ def callback_handler(call):
         else:
             show_day_tasks(user_id, date, msg_id)
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data.startswith('add_'):
         date = data.replace('add_', '')
@@ -1673,12 +1956,12 @@ def callback_handler(call):
             user_id,
             f"Напиши, что нужно сделать {format_date(date)}:"
         )
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data.startswith('task_'):
         task_id = int(data.replace('task_', ''))
         show_task_details(user_id, task_id, msg_id)
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data.startswith('done_'):
         task_id = int(data.replace('done_', ''))
@@ -1688,7 +1971,7 @@ def callback_handler(call):
         if task:
             show_day_tasks(user_id, task[2], msg_id)
 
-        bot.answer_callback_query(call.id, "Выполнено! 🎉")
+        safe_answer_callback(call, "Выполнено! 🎉")
 
     elif data.startswith('delete_one_'):
         task_id = int(data.replace('delete_one_', ''))
@@ -1698,7 +1981,7 @@ def callback_handler(call):
             delete_task(task_id, user_id)
             show_day_tasks(user_id, task[2], msg_id)
 
-        bot.answer_callback_query(call.id, "Удалено")
+        safe_answer_callback(call, "Удалено")
 
     elif data.startswith('move_'):
         tid = int(data.replace('move_', ''))
@@ -1708,7 +1991,7 @@ def callback_handler(call):
             "📅 Выбери новую дату:",
             reply_markup=create_calendar_keyboard(user_id)
         )
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data.startswith('clear_ask_'):
         date = data.replace('clear_ask_', '')
@@ -1718,17 +2001,17 @@ def callback_handler(call):
             msg_id,
             reply_markup=create_confirm_clear_keyboard(date)
         )
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data.startswith('clear_confirm_'):
         date = data.replace('clear_confirm_', '')
         clear_day(user_id, date)
         show_day_tasks(user_id, date, msg_id)
-        bot.answer_callback_query(call.id, "День очищен")
+        safe_answer_callback(call, "День очищен")
 
     elif data == 'back_calendar':
         show_calendar(user_id, msg_id)
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data == 'main_menu':
         bot.send_message(
@@ -1737,7 +2020,7 @@ def callback_handler(call):
             parse_mode='HTML',
             reply_markup=create_main_keyboard()
         )
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
         
     # --- НАСТРОЙКИ ---
     elif data == 'setting_default_time':
@@ -1747,7 +2030,7 @@ def callback_handler(call):
             msg_id,
             reply_markup=create_default_time_keyboard(user_id)
         )
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data == 'setting_default_before':
         bot.edit_message_text(
@@ -1756,7 +2039,7 @@ def callback_handler(call):
             msg_id,
             reply_markup=create_default_before_keyboard(user_id)
         )
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data == 'setting_recurring':
         bot.edit_message_text(
@@ -1765,11 +2048,11 @@ def callback_handler(call):
             msg_id,
             reply_markup=create_recurring_management_keyboard()
         )
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data == 'setting_stats':
         show_user_stats(user_id, msg_id)
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data.startswith('dtime_'):
         if data == 'dtime_back_settings':
@@ -1782,7 +2065,7 @@ def callback_handler(call):
                 msg_id,
                 reply_markup=create_settings_keyboard()
             )
-            bot.answer_callback_query(call.id)
+            safe_answer_callback(call)
             return
 
         time_val = data.replace('dtime_', '')
@@ -1797,7 +2080,7 @@ def callback_handler(call):
             msg_id,
             reply_markup=create_settings_keyboard()
         )
-        bot.answer_callback_query(call.id, f"✅ Время по умолчанию: {time_val}")
+        safe_answer_callback(call, f"✅ Время по умолчанию: {time_val}")
 
     elif data.startswith('dbefore_'):
         if data == 'dbefore_back_settings':
@@ -1810,7 +2093,7 @@ def callback_handler(call):
                 msg_id,
                 reply_markup=create_settings_keyboard()
             )
-            bot.answer_callback_query(call.id)
+            safe_answer_callback(call)
             return
 
         before_val = int(data.replace('dbefore_', ''))
@@ -1840,7 +2123,7 @@ def callback_handler(call):
             msg_id,
             reply_markup=create_settings_keyboard()
         )
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data.startswith('stats_'):
         if data == 'stats_today':
@@ -1855,18 +2138,30 @@ def callback_handler(call):
         elif data == 'stats_all':
             show_user_stats(user_id, msg_id)
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
         
     # ========== НАПОМИНАНИЯ ==========
     elif data == 'before_none':
         if user_id not in user_temp_data:
-            bot.answer_callback_query(call.id, "❌ Ошибка: данные не найдены")
+            safe_answer_callback(call, "❌ Ошибка: данные не найдены")
             return
 
         temp = user_temp_data[user_id]
         remind_before = 0
 
-        if temp.get('action') == 'set_task_time':
+        if temp.get('action') == 'pile_set_task_time':
+            add_task_to_db(
+                user_id,
+                temp['task_text'],
+                temp['date'],
+                temp.get('reminder_time', '09:00'),
+                remind_before
+            )
+            delete_task_from_pile(temp['pile_task_id'], user_id)
+            del user_temp_data[user_id]
+            bot.send_message(user_id, f"📅 Дело поставлено на {format_date(temp['date'])} в {temp.get('reminder_time', '09:00')}.", reply_markup=create_main_keyboard())
+
+        elif temp.get('action') == 'set_task_time':
             add_task_to_db(
                 user_id,
                 temp['task_text'],
@@ -1881,6 +2176,17 @@ def callback_handler(call):
                 user_id,
                 "✅ Дело добавлено! Без предварительного напоминания.",
                 reply_markup=create_main_keyboard()
+            )
+
+        elif temp.get('action') == 'set_task_time':
+            bot.edit_message_text(
+                f"📝 <b>{temp['task_text']}</b>\n\n"
+                f"Время: {time_value}\n\n"
+                f"За сколько напомнить?",
+                user_id,
+                msg_id,
+                parse_mode='HTML',
+                reply_markup=create_remind_before_keyboard(user_id)
             )
 
         elif temp.get('action') == 'set_recurring_time':
@@ -1903,13 +2209,13 @@ def callback_handler(call):
                 reply_markup=create_main_keyboard()
             )
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data == 'before_cancel':
         if user_id in user_temp_data:
             del user_temp_data[user_id]
 
-        bot.answer_callback_query(call.id, "Отменено")
+        safe_answer_callback(call, "Отменено")
         bot.send_message(
             user_id,
             "❌ Создание дела отменено.",
@@ -1921,13 +2227,25 @@ def callback_handler(call):
             remind_before = int(data.replace('before_', ''))
 
             if user_id not in user_temp_data:
-                bot.answer_callback_query(call.id, "❌ Ошибка: данные не найдены")
+                safe_answer_callback(call, "❌ Ошибка: данные не найдены")
                 return
 
             temp = user_temp_data[user_id]
             temp['remind_before'] = remind_before
 
-            if temp.get('action') == 'set_task_time':
+            if temp.get('action') == 'pile_set_task_time':
+                add_task_to_db(
+                    user_id,
+                    temp['task_text'],
+                    temp['date'],
+                    temp.get('reminder_time', '09:00'),
+                    remind_before
+                )
+                delete_task_from_pile(temp['pile_task_id'], user_id)
+                del user_temp_data[user_id]
+                bot.send_message(user_id, f"📅 Дело поставлено на {format_date(temp['date'])} в {temp.get('reminder_time', '09:00')}.", reply_markup=create_main_keyboard())
+
+            elif temp.get('action') == 'set_task_time':
                 add_task_to_db(
                     user_id,
                     temp['task_text'],
@@ -1965,17 +2283,25 @@ def callback_handler(call):
                     reply_markup=create_main_keyboard()
                 )
 
-            bot.answer_callback_query(call.id)
+            safe_answer_callback(call)
 
         except Exception as e:
             logger.error(f"Ошибка обработки напоминания: {e}")
-            bot.answer_callback_query(call.id, "❌ Ошибка")
+            safe_answer_callback(call, "❌ Ошибка")
             
     elif data == 'time_none':
         if user_id in user_temp_data:
             temp = user_temp_data[user_id]
             temp['reminder_time'] = None
             temp['remind_before'] = 0
+
+            if temp.get('action') == 'pile_set_task_time':
+                add_task_to_db(user_id, temp['task_text'], temp['date'], None, 0)
+                delete_task_from_pile(temp['pile_task_id'], user_id)
+                del user_temp_data[user_id]
+                bot.send_message(user_id, f"📅 Дело поставлено на {format_date(temp['date'])}. Без напоминания.", reply_markup=create_main_keyboard())
+                safe_answer_callback(call, "✅ Поставлено")
+                return
 
             if temp.get('action') == 'set_task_time':
                 add_task_to_db(
@@ -1998,7 +2324,7 @@ def callback_handler(call):
         if user_id in user_temp_data:
             del user_temp_data[user_id]
 
-        bot.answer_callback_query(call.id, "Отменено")
+        safe_answer_callback(call, "Отменено")
         bot.send_message(
             user_id,
             "❌ Создание дела отменено.",
@@ -2009,15 +2335,17 @@ def callback_handler(call):
         time_value = data.replace('time_', '')
 
         if user_id not in user_temp_data:
-            bot.answer_callback_query(call.id, "❌ Ошибка: данные не найдены")
+            safe_answer_callback(call, "❌ Ошибка: данные не найдены")
             return
 
         temp = user_temp_data[user_id]
         temp['reminder_time'] = time_value
 
-        if temp.get('action') == 'set_task_time':
+        if temp.get('action') == 'pile_set_task_time':
+            temp['reminder_time'] = time_value
             bot.edit_message_text(
-                f"📝 <b>{temp['task_text']}</b>\n\n"
+                f"📥 <b>{temp['task_text']}</b>\n\n"
+                f"Дата: {format_date(temp['date'])}\n"
                 f"Время: {time_value}\n\n"
                 f"За сколько напомнить?",
                 user_id,
@@ -2037,18 +2365,18 @@ def callback_handler(call):
                 reply_markup=create_remind_before_keyboard(user_id)
             )
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     # --- ПОВТОРЯЮЩИЕСЯ ---
     elif data.startswith('recur_'):
         date = data.replace('recur_', '')
         user_temp_data[user_id] = {'date': date, 'action': 'awaiting_recurring_text'}
         bot.send_message(user_id, f"Что нужно повторять {format_date(date)}?")
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data.startswith('duration_'):
         if user_id not in user_temp_data:
-            bot.answer_callback_query(call.id, "❌ Данные создания дела не найдены")
+            safe_answer_callback(call, "❌ Данные создания дела не найдены")
             return
 
         temp = user_temp_data[user_id]
@@ -2065,7 +2393,7 @@ def callback_handler(call):
                 reply_markup=create_main_keyboard()
             )
 
-            bot.answer_callback_query(call.id)
+            safe_answer_callback(call)
             return
 
         # Дата начала повторения
@@ -2092,7 +2420,7 @@ def callback_handler(call):
             duration_text = "🗓️ На 3 месяца"
 
         else:
-            bot.answer_callback_query(call.id)
+            safe_answer_callback(call)
             return
 
         # Сохраняем дату окончания
@@ -2114,7 +2442,7 @@ def callback_handler(call):
             reply_markup=create_reminder_time_keyboard(user_id)
         )
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
         
     elif data.startswith('type_'):
         recur_type = data.replace('type_', '')
@@ -2128,7 +2456,7 @@ def callback_handler(call):
                 "❌ Отменено",
                 reply_markup=create_main_keyboard()
             )
-            bot.answer_callback_query(call.id)
+            safe_answer_callback(call)
             return
 
         if user_id not in user_temp_data:
@@ -2186,14 +2514,14 @@ def callback_handler(call):
                 "(например: 5, 10, 15):"
             )
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
 
     elif data.startswith('weekday_'):
         day_code = data.replace('weekday_', '')
 
         if user_id not in user_temp_data:
-            bot.answer_callback_query(call.id)
+            safe_answer_callback(call)
             return
 
         temp = user_temp_data[user_id]
@@ -2241,12 +2569,12 @@ def callback_handler(call):
                     f"Ошибка обновления выбора дней недели: {e}"
                 )
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
 
     elif data == 'weekdays_done':
         if user_id not in user_temp_data:
-            bot.answer_callback_query(call.id)
+            safe_answer_callback(call)
             return
 
         temp = user_temp_data[user_id]
@@ -2259,7 +2587,7 @@ def callback_handler(call):
                     user_id,
                     "❌ Нужно выбрать хотя бы один день!"
                 )
-                bot.answer_callback_query(call.id)
+                safe_answer_callback(call)
                 return
 
             day_map = {
@@ -2290,7 +2618,7 @@ def callback_handler(call):
                 reply_markup=create_recurring_duration_keyboard()
             )
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
 
     elif data.startswith('recurring_view_'):
@@ -2302,7 +2630,7 @@ def callback_handler(call):
             msg_id
         )
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
 
     elif data.startswith('delete_recurring_ask_'):
@@ -2320,7 +2648,7 @@ def callback_handler(call):
             )
         )
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
 
     elif data.startswith('delete_recurring_confirm_'):
@@ -2384,7 +2712,7 @@ def callback_handler(call):
             reply_markup=markup
         )
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
 
     elif data == 'recurring_delete_all_confirm':
@@ -2419,7 +2747,7 @@ def callback_handler(call):
             reply_markup=create_recurring_management_keyboard()
         )
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
 
     elif data == 'recurring_list':
@@ -2439,27 +2767,27 @@ def callback_handler(call):
                 reply_markup=create_recurring_list_keyboard(tasks)
             )
 
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data == 'admin_stats_short':
         if user_id not in ADMIN_IDS:
-            bot.answer_callback_query(call.id)
+            safe_answer_callback(call)
             return
 
         send_activity_report(user_id)
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     elif data == 'admin_stats_detailed':
         if user_id not in ADMIN_IDS:
-            bot.answer_callback_query(call.id)
+            safe_answer_callback(call)
             return
 
         send_detailed_activity_report(user_id)
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
     # Если ничего не подошло
     else:
-        bot.answer_callback_query(call.id)
+        safe_answer_callback(call)
 
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
@@ -2480,10 +2808,10 @@ if __name__ == "__main__":
     reset_thread.daemon = True
     reset_thread.start()
 
-    # Поток для ежедневного отчёта
-    report_thread = threading.Thread(target=daily_report_worker)
-    report_thread.daemon = True
-    report_thread.start()
+    # Поток ежедневной сводки дел
+    summary_thread = threading.Thread(target=daily_summary_worker)
+    summary_thread.daemon = True
+    summary_thread.start()
 
     retry_delay = 5
     while True:
