@@ -115,8 +115,6 @@ def add_missing_columns():
             cursor.execute("ALTER TABLE user_settings ADD COLUMN daily_summary_sent_date TEXT")
         if 'evening_report_sent_date' not in columns:
             cursor.execute("ALTER TABLE user_settings ADD COLUMN evening_report_sent_date TEXT")
-        if 'evening_report_sent_date' not in columns:
-            cursor.execute("ALTER TABLE user_settings ADD COLUMN evening_report_sent_date TEXT")
         cursor.execute("PRAGMA table_info(tasks)")
         columns = [column[1] for column in cursor.fetchall()]
         if 'reminder_sent' not in columns:
@@ -166,9 +164,13 @@ def get_user_settings(user_id):
     )
     s = cursor.fetchone()
     if not s:
-        cursor.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
+        cursor.execute("INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (user_id,))
         conn.commit()
-        s = ('09:00', 0, 0, None, None, None, None)
+        cursor.execute(
+            "SELECT default_reminder_time, default_remind_before, setup_done, wake_time, sleep_time, daily_summary_sent_date, evening_report_sent_date FROM user_settings WHERE user_id=?",
+            (user_id,)
+        )
+        s = cursor.fetchone()
     conn.close()
     return {
         'default_reminder_time': s[0],
@@ -181,7 +183,7 @@ def get_user_settings(user_id):
     }
 
 def update_user_setting(user_id, setting_name, setting_value):
-    allowed_settings = ['default_reminder_time', 'default_remind_before', 'theme', 'auto_delete_done', 'notification_type']
+    allowed_settings = ['default_reminder_time', 'default_remind_before', 'theme', 'auto_delete_done', 'notification_type', 'setup_done', 'wake_time', 'sleep_time']
     if setting_name not in allowed_settings:
         return
     conn = sqlite3.connect('tasks.db')
@@ -259,7 +261,7 @@ def create_calendar_keyboard(user_id, year=None, month=None):
 
     markup = types.InlineKeyboardMarkup(row_width=7)
     month_name = RU_MONTHS[month]
-    header = f"{month_name} {year}"
+    header = f"{month_name.capitalize()} {year}"
 
     prev_month = month - 1 if month > 1 else 12
     prev_year = year if month > 1 else year - 1
@@ -298,7 +300,7 @@ def create_calendar_keyboard(user_id, year=None, month=None):
     )
     markup.row(
         types.InlineKeyboardButton(
-            f"📋 Дела на {RU_MONTHS_GENITIVE[month]}",
+            f"📋 Дела на {RU_MONTHS[month]}",
             callback_data=f"month_tasks_{year}_{month}"
         )
     )
@@ -1763,6 +1765,7 @@ def handle_message(message):
 
             if setup_action == 'setup_wake':
                 update_user_setting(user_id, 'wake_time', text)
+                update_user_setting(user_id, 'default_reminder_time', text)
                 user_states[user_id] = {'action': 'setup_sleep'}
                 bot.send_message(user_id, "А во сколько ты обычно ложишься спать?\nНапример: <b>00:30</b>", parse_mode='HTML')
                 return
