@@ -2013,7 +2013,8 @@ def callback_handler(call):
                 user_id,
                 msg_id,
                 reply_markup=create_main_keyboard()
-            )            safe_answer_callback(call)
+            )
+            safe_answer_callback(call)
             return
 
         text = "📋 <b>Все делишки:</b>\n\n"
