@@ -5,6 +5,7 @@ import logging
 import builtins
 import sys
 from zoneinfo import ZoneInfo
+from telebot import types
 
 
 def get_current_time():
@@ -18,69 +19,59 @@ def check_reminders(bot, logger):
             now = get_current_time()
             current_date = now.strftime('%Y-%m-%d')
             tomorrow_date = (now + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
-
             conn = sqlite3.connect('tasks.db')
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT id, user_id, task, reminder_time, remind_before
+                SELECT id, user_id, task, date, reminder_time, remind_before,
+                       advance_reminder_sent, exact_reminder_sent
                 FROM tasks
-                WHERE date = ? AND is_done = 0 AND reminder_sent = 0
+                WHERE date IN (?, ?) AND is_done=0
                 AND reminder_time IS NOT NULL AND reminder_time != 'None'
-            """, (current_date,))
-            tasks_today = cursor.fetchall()
+            """, (current_date, tomorrow_date))
 
-            cursor.execute("""
-                SELECT id, user_id, task, reminder_time, remind_before
-                FROM tasks
-                WHERE date = ? AND is_done = 0 AND reminder_sent = 0
-                AND remind_before = 1440
-                AND reminder_time IS NOT NULL AND reminder_time != 'None'
-            """, (tomorrow_date,))
-            tasks_tomorrow = cursor.fetchall()
-
-            tasks = tasks_today + tasks_tomorrow
-
-            for task_id, user_id, task_text, reminder_time, remind_before in tasks:
+            for task_id, user_id, task_text, task_date, reminder_time, remind_before, advance_sent, exact_sent in cursor.fetchall():
                 try:
-                    reminder_datetime = datetime.datetime.strptime(
-                        f"{current_date} {reminder_time}",
-                        "%Y-%m-%d %H:%M"
+                    scheduled = datetime.datetime.strptime(
+                        f"{task_date} {reminder_time}", "%Y-%m-%d %H:%M"
                     ).replace(tzinfo=ZoneInfo("Europe/Moscow"))
 
-                    if remind_before > 0 and remind_before != 1440:
-                        reminder_datetime -= datetime.timedelta(minutes=remind_before)
-
-                    if now >= reminder_datetime:
-                        if remind_before > 0:
+                    # Предварительное напоминание: ровно один раз.
+                    if remind_before > 0 and not advance_sent:
+                        advance_at = scheduled - datetime.timedelta(minutes=remind_before)
+                        if now >= advance_at and now < scheduled:
                             if remind_before < 60:
                                 text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез {remind_before} минут ({reminder_time})"
                             elif remind_before == 60:
                                 text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез 1 час ({reminder_time})"
                             elif remind_before == 120:
                                 text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез 2 часа ({reminder_time})"
-                            elif remind_before == 1440:
-                                text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЗавтра в {reminder_time}"
                             else:
-                                text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез {remind_before} минут ({reminder_time})"
+                                text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЗавтра в {reminder_time}" if remind_before == 1440 else f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез {remind_before} минут ({reminder_time})"
+                            markup = types.InlineKeyboardMarkup()
+                            markup.add(types.InlineKeyboardButton("✅ Сделано", callback_data=f"done_{task_id}"))
+                            bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)
+                            cursor.execute("UPDATE tasks SET advance_reminder_sent=1 WHERE id=?", (task_id,))
+                            conn.commit()
+                            advance_sent = 1
+
+                    # Точное время: отдельное уведомление, даже если предварительное уже было.
+                    if not exact_sent and now >= scheduled:
+                        if task_date == current_date:
+                            text = f"🔴 <b>Время уже прошло</b>\n\n{task_text}\n\nПланировалось на {reminder_time}." if now > scheduled else f"⏰ <b>Пора делать!</b>\n\n{task_text}\n\nСейчас {reminder_time}."
                         else:
-                            text = f"⏰ <b>Пора делать!</b>\n\n{task_text}\n\nСейчас время: {reminder_time}"
-
-                        bot.send_message(user_id, text, parse_mode='HTML')
-                        logger.info(f"Отправлено уведомление для задачи {task_id} пользователю {user_id}")
-
-                        cursor.execute(
-                            "UPDATE tasks SET reminder_sent = 1 WHERE id = ?",
-                            (task_id,)
-                        )
+                            continue
+                        markup = types.InlineKeyboardMarkup()
+                        markup.add(types.InlineKeyboardButton("✅ Сделано", callback_data=f"done_{task_id}"))
+                        bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)
+                        cursor.execute("UPDATE tasks SET exact_reminder_sent=1, reminder_sent=1 WHERE id=?", (task_id,))
                         conn.commit()
 
                 except Exception as e:
                     logger.error(f"Ошибка при обработке уведомления для задачи {task_id}: {e}")
 
             conn.close()
-            time.sleep(30)
-
+            time.sleep(20)
         except Exception as e:
             logger.error(f"Ошибка в системе уведомлений: {e}")
             time.sleep(60)
@@ -98,7 +89,7 @@ def reset_daily_reminders(logger, generate_recurring_tasks_for_user):
                 cursor = conn.cursor()
 
                 cursor.execute(
-                    "UPDATE tasks SET reminder_sent = 0 WHERE date = ? AND is_done = 0",
+                    "UPDATE tasks SET reminder_sent = 0, advance_reminder_sent = 0, exact_reminder_sent = 0 WHERE date = ? AND is_done = 0",
                     (today_str,)
                 )
                 conn.commit()
