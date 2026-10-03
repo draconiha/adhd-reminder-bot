@@ -1403,30 +1403,42 @@ def show_calendar(user_id, edit_message_id=None, year=None, month=None):
         user_calendar_messages[user_id] = msg.message_id
 
 def show_month_tasks(user_id, year, month, edit_message_id=None):
-    """Показывает все дела выбранного месяца, сгруппированные по датам."""
-    tasks = get_tasks_by_month(user_id, year, month)
-    month_name = RU_MONTHS[month]
+    """Показывает все дела выбранного месяца, сгруппированные по датам.
 
-    if not tasks:
+    Для статуса выполнения используем тот же get_tasks_by_date(), что и
+    обычный просмотр дня. Так месячный список не может показывать другой
+    статус, чем дневной.
+    """
+    month_name = RU_MONTHS[month]
+    all_tasks = []
+
+    last_day = calendar.monthrange(year, month)[1]
+    for day in range(1, last_day + 1):
+        date_str = f"{year}-{month:02d}-{day:02d}"
+        for task_id, task, is_done, reminder_time, remind_before in get_tasks_by_date(user_id, date_str):
+            all_tasks.append(
+                (task_id, task, date_str, int(is_done or 0), reminder_time, remind_before)
+            )
+
+    if not all_tasks:
         text = f"📭 <b>Дел на {month_name} {year} пока нет.</b>"
     else:
-        total = len(tasks)
-        done = sum(1 for _, _, _, is_done, _, _ in tasks)
+        total = len(all_tasks)
+        done = sum(1 for _, _, _, is_done, _, _ in all_tasks if int(is_done or 0) == 1)
         text = (
             f"📋 <b>Дела на {month_name} {year}</b>\n"
             f"Всего: {total} · выполнено: {done}\n"
         )
+
         current_date = None
-        for _, task, date_str, is_done, reminder_time, remind_before in tasks:
+        for _, task, date_str, is_done, reminder_time, remind_before in all_tasks:
             if date_str != current_date:
                 current_date = date_str
-                try:
-                    d = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
-                    date_text = f"{d.day} {RU_MONTHS_GENITIVE[d.month]}"
-                except Exception:
-                    date_text = date_str
+                d = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
+                date_text = f"{d.day} {RU_MONTHS_GENITIVE[d.month]}"
                 text += f"\n📅 <b>{date_text}</b>\n"
-            if is_done:
+
+            if int(is_done or 0) == 1:
                 text += f"• <s>{task}</s> ✅\n"
             else:
                 time_info = f" ({reminder_time})" if reminder_time and reminder_time != 'None' else ""
@@ -1449,13 +1461,22 @@ def show_month_tasks(user_id, year, month, edit_message_id=None):
     parts = split_text(text)
     if edit_message_id:
         try:
-            bot.edit_message_text(parts[0], user_id, edit_message_id, parse_mode='HTML',
-                                  reply_markup=markup if len(parts) == 1 else None)
+            bot.edit_message_text(
+                parts[0],
+                user_id,
+                edit_message_id,
+                parse_mode='HTML',
+                reply_markup=markup if len(parts) == 1 else None
+            )
         except Exception:
             bot.send_message(user_id, parts[0], parse_mode='HTML')
     else:
-        bot.send_message(user_id, parts[0], parse_mode='HTML',
-                         reply_markup=markup if len(parts) == 1 else None)
+        bot.send_message(
+            user_id,
+            parts[0],
+            parse_mode='HTML',
+            reply_markup=markup if len(parts) == 1 else None
+        )
     for part in parts[1:]:
         bot.send_message(user_id, part, parse_mode='HTML')
     if len(parts) > 1:
@@ -1492,8 +1513,7 @@ def show_day_tasks(user_id, date_str, edit_message_id=None):
         short = task[:18] + "..." if len(task) > 18 else task
         if not done:
             markup.row(
-                types.InlineKeyboardButton(f"🔧 {short}", callback_data=f"task_{tid}"),
-                types.InlineKeyboardButton("✏️", callback_data=f"edit_{tid}")
+                types.InlineKeyboardButton(f"🔧 {short}", callback_data=f"task_{tid}")
             )
     markup.row(
         types.InlineKeyboardButton("➕ Плюс дело", callback_data=f"add_{date_str}"),
@@ -2184,7 +2204,7 @@ def callback_handler(call):
         show_task_details(user_id, task_id, msg_id)
         safe_answer_callback(call)
 
-    elif data.startswith('edit_'):
+    elif data.startswith('edit_') and data.count('_') == 1:
         task_id = int(data.replace('edit_', ''))
         task = get_task_by_id(task_id)
         if not task or task[0] != user_id:
