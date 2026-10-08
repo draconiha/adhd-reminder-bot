@@ -24,20 +24,47 @@ def check_reminders(bot, logger):
 
             cursor.execute("""
                 SELECT id, user_id, task, date, reminder_time, remind_before,
-                       advance_reminder_sent, exact_reminder_sent
+                       advance_reminder_sent, exact_reminder_sent, snoozed_until
                 FROM tasks
-                WHERE date IN (?, ?) AND is_done=0
+                WHERE is_done=0
                 AND reminder_time IS NOT NULL AND reminder_time != 'None'
+                AND (date IN (?, ?) OR snoozed_until IS NOT NULL)
             """, (current_date, tomorrow_date))
 
-            for task_id, user_id, task_text, task_date, reminder_time, remind_before, advance_sent, exact_sent in cursor.fetchall():
+            for task_id, user_id, task_text, task_date, reminder_time, remind_before, advance_sent, exact_sent, snoozed_until in cursor.fetchall():
                 try:
                     scheduled = datetime.datetime.strptime(
                         f"{task_date} {reminder_time}", "%Y-%m-%d %H:%M"
                     ).replace(tzinfo=ZoneInfo("Europe/Moscow"))
 
+                    # Отложенное напоминание имеет приоритет над обычным временем дела.
+                    if snoozed_until:
+                        snooze_at = datetime.datetime.strptime(
+                            snoozed_until, "%Y-%m-%d %H:%M:%S"
+                        ).replace(tzinfo=ZoneInfo("Europe/Moscow"))
+                        if now < snooze_at:
+                            continue
+                        text = f"⏰ <b>Напоминаю ещё раз!</b>\n\n{task_text}"
+                        markup = types.InlineKeyboardMarkup(row_width=2)
+                        markup.add(
+                            types.InlineKeyboardButton("✅ Сделано", callback_data=f"done_{task_id}"),
+                            types.InlineKeyboardButton("⏰ Напомни попозже", callback_data=f"snooze_{task_id}")
+                        )
+                        bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)
+                        if now >= scheduled:
+                            cursor.execute(
+                                "UPDATE tasks SET snoozed_until=NULL, exact_reminder_sent=1, reminder_sent=1 WHERE id=?",
+                                (task_id,)
+                            )
+                        else:
+                            cursor.execute(
+                                "UPDATE tasks SET snoozed_until=NULL WHERE id=?",
+                                (task_id,)
+                            )
+                        conn.commit()
+                        continue
+
                     # Предварительное напоминание: ровно один раз.
-                    if remind_before > 0 and not advance_sent:
                         advance_at = scheduled - datetime.timedelta(minutes=remind_before)
                         if now >= advance_at and now < scheduled:
                             if remind_before < 60:
@@ -48,8 +75,11 @@ def check_reminders(bot, logger):
                                 text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез 2 часа ({reminder_time})"
                             else:
                                 text = f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЗавтра в {reminder_time}" if remind_before == 1440 else f"⏰ <b>Скоро дело!</b>\n\n{task_text}\n\nЧерез {remind_before} минут ({reminder_time})"
-                            markup = types.InlineKeyboardMarkup()
-                            markup.add(types.InlineKeyboardButton("✅ Сделано", callback_data=f"done_{task_id}"))
+                            markup = types.InlineKeyboardMarkup(row_width=2)
+                            markup.add(
+                                types.InlineKeyboardButton("✅ Сделано", callback_data=f"done_{task_id}"),
+                                types.InlineKeyboardButton("⏰ Напомни попозже", callback_data=f"snooze_{task_id}")
+                            )
                             bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)
                             cursor.execute("UPDATE tasks SET advance_reminder_sent=1 WHERE id=?", (task_id,))
                             conn.commit()
@@ -58,11 +88,17 @@ def check_reminders(bot, logger):
                     # Точное время: отдельное уведомление, даже если предварительное уже было.
                     if not exact_sent and now >= scheduled:
                         if task_date == current_date:
-                            text = f"🔴 <b>Время уже прошло</b>\n\n{task_text}\n\nПланировалось на {reminder_time}." if now > scheduled else f"⏰ <b>Пора делать!</b>\n\n{task_text}\n\nСейчас {reminder_time}."
+                            if now <= scheduled + datetime.timedelta(minutes=1):
+                                text = f"⏰ <b>Время заняться делом!</b>\n\n{task_text}\n\nЗапланировано на {reminder_time}."
+                            else:
+                                text = f"🔴 <b>Время уже прошло</b>\n\n{task_text}\n\nПланировалось на {reminder_time}."
                         else:
                             continue
-                        markup = types.InlineKeyboardMarkup()
-                        markup.add(types.InlineKeyboardButton("✅ Сделано", callback_data=f"done_{task_id}"))
+                        markup = types.InlineKeyboardMarkup(row_width=2)
+                        markup.add(
+                            types.InlineKeyboardButton("✅ Сделано", callback_data=f"done_{task_id}"),
+                            types.InlineKeyboardButton("⏰ Напомни попозже", callback_data=f"snooze_{task_id}")
+                        )
                         bot.send_message(user_id, text, parse_mode='HTML', reply_markup=markup)
                         cursor.execute("UPDATE tasks SET exact_reminder_sent=1, reminder_sent=1 WHERE id=?", (task_id,))
                         conn.commit()
