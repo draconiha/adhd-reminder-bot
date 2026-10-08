@@ -115,6 +115,8 @@ def add_missing_columns():
             cursor.execute("ALTER TABLE user_settings ADD COLUMN daily_summary_sent_date TEXT")
         if 'evening_report_sent_date' not in columns:
             cursor.execute("ALTER TABLE user_settings ADD COLUMN evening_report_sent_date TEXT")
+        if 'evening_report_time' not in columns:
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN evening_report_time TEXT DEFAULT '21:00'")
         cursor.execute("PRAGMA table_info(tasks)")
         columns = [column[1] for column in cursor.fetchall()]
         if 'reminder_sent' not in columns:
@@ -125,6 +127,8 @@ def add_missing_columns():
             cursor.execute("ALTER TABLE tasks ADD COLUMN exact_reminder_sent INTEGER DEFAULT 0")
         if 'recurring_id' not in columns:
             cursor.execute("ALTER TABLE tasks ADD COLUMN recurring_id INTEGER")
+        if 'snoozed_until' not in columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN snoozed_until TEXT")
         cursor.execute("PRAGMA table_info(user_activity)")
         columns = [column[1] for column in cursor.fetchall()]
         if 'username' not in columns:
@@ -158,7 +162,7 @@ def get_user_settings(user_id):
     conn = sqlite3.connect('tasks.db')
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT default_reminder_time, default_remind_before, setup_done, wake_time, sleep_time, daily_summary_sent_date, evening_report_sent_date "
+        "SELECT default_reminder_time, default_remind_before, setup_done, wake_time, sleep_time, daily_summary_sent_date, evening_report_sent_date, evening_report_time "
         "FROM user_settings WHERE user_id=?",
         (user_id,)
     )
@@ -167,7 +171,7 @@ def get_user_settings(user_id):
         cursor.execute("INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (user_id,))
         conn.commit()
         cursor.execute(
-            "SELECT default_reminder_time, default_remind_before, setup_done, wake_time, sleep_time, daily_summary_sent_date, evening_report_sent_date FROM user_settings WHERE user_id=?",
+            "SELECT default_reminder_time, default_remind_before, setup_done, wake_time, sleep_time, daily_summary_sent_date, evening_report_sent_date, evening_report_time FROM user_settings WHERE user_id=?",
             (user_id,)
         )
         s = cursor.fetchone()
@@ -179,11 +183,12 @@ def get_user_settings(user_id):
         'wake_time': s[3],
         'sleep_time': s[4],
         'daily_summary_sent_date': s[5],
-        'evening_report_sent_date': s[6]
+        'evening_report_sent_date': s[6],
+        'evening_report_time': s[7] or '21:00'
     }
 
 def update_user_setting(user_id, setting_name, setting_value):
-    allowed_settings = ['default_reminder_time', 'default_remind_before', 'theme', 'auto_delete_done', 'notification_type', 'setup_done', 'wake_time', 'sleep_time']
+    allowed_settings = ['default_reminder_time', 'default_remind_before', 'theme', 'auto_delete_done', 'notification_type', 'setup_done', 'wake_time', 'sleep_time', 'evening_report_time']
     if setting_name not in allowed_settings:
         return
     conn = sqlite3.connect('tasks.db')
@@ -285,7 +290,14 @@ def create_calendar_keyboard(user_id, year=None, month=None):
                 row.append(types.InlineKeyboardButton(" ", callback_data="ignore"))
             else:
                 date_str = f"{year}-{month:02d}-{day:02d}"
-                has_tasks = len(get_tasks_by_date(user_id, date_str)) > 0
+                conn = sqlite3.connect('tasks.db')
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT 1 FROM tasks WHERE user_id=? AND date=? AND is_done=0 LIMIT 1",
+                    (user_id, date_str)
+                )
+                has_tasks = cursor.fetchone() is not None
+                conn.close()
                 if year == now.year and month == now.month and day == now.day:
                     text = f"[{day}] ●" if has_tasks else f"[{day}]"
                 else:
@@ -311,6 +323,7 @@ def create_settings_keyboard():
     markup.add(
         types.InlineKeyboardButton("⏰ Время по умолчанию", callback_data="setting_default_time"),
         types.InlineKeyboardButton("⏱️ Напоминать заранее", callback_data="setting_default_before"),
+        types.InlineKeyboardButton("🌙 Вечернее уведомление", callback_data="setting_evening_time"),
         types.InlineKeyboardButton("🔁 Управление повторяющимися", callback_data="setting_recurring"),
         types.InlineKeyboardButton("📊 Статистика", callback_data="setting_stats"),
         types.InlineKeyboardButton("🏠 В меню", callback_data="main_menu")
@@ -329,6 +342,20 @@ def create_default_time_keyboard(user_id):
             row.append(types.InlineKeyboardButton(f"{emoji} {t}", callback_data=f"dtime_{t}"))
         markup.row(*row)
     markup.row(types.InlineKeyboardButton("◀️ Назад", callback_data="back_settings"))
+    return markup
+
+def create_evening_time_keyboard(user_id):
+    settings = get_user_settings(user_id)
+    default = settings['evening_report_time']
+    times = [f"{hour:02d}:00" for hour in range(24)]
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    for i in range(0, len(times), 3):
+        row = []
+        for t in times[i:i+3]:
+            emoji = "✅" if t == default else "🕘"
+            row.append(types.InlineKeyboardButton(f"{emoji} {t}", callback_data=f"etime_{t}"))
+        markup.row(*row)
+    markup.row(types.InlineKeyboardButton("◀️ Назад", callback_data="etime_back_settings"))
     return markup
 
 def create_default_before_keyboard(user_id):
@@ -1338,11 +1365,10 @@ def evening_report_worker():
     while True:
         try:
             now=get_current_time(); current_time=now.strftime('%H:%M'); today_str=now.strftime('%Y-%m-%d')
-            if current_time!='21:00': time.sleep(20); continue
             conn=sqlite3.connect('tasks.db'); cursor=conn.cursor()
-            cursor.execute("SELECT user_id, setup_done, evening_report_sent_date FROM user_settings")
-            for uid, setup_done, sent in cursor.fetchall():
-                if not setup_done or sent==today_str: continue
+            cursor.execute("SELECT user_id, setup_done, evening_report_sent_date, evening_report_time FROM user_settings")
+            for uid, setup_done, sent, report_time in cursor.fetchall():
+                if not setup_done or sent==today_str or (report_time or '21:00') != current_time: continue
                 try:
                     send_evening_report(uid,now)
                     cursor.execute("UPDATE user_settings SET evening_report_sent_date=? WHERE user_id=?",(today_str,uid)); conn.commit()
@@ -1867,8 +1893,7 @@ def handle_message(message):
         user_states[user_id] = {'action': 'add_today'}
         bot.send_message(user_id, "Напиши, что нужно сделать сегодня:")
     elif text == '📥 Куча дел':
-        user_states[user_id] = {'action': 'add_pile'}
-        bot.send_message(user_id, "Напиши дело — я положу его в кучу:")
+        show_task_pile(user_id)
     elif text == '📋 Что сегодня?':
         show_today_tasks(user_id)
     elif text == '⚙️ Настройки':
@@ -1876,6 +1901,7 @@ def handle_message(message):
         bot.send_message(user_id,
             f"⚙️ Твои настройки:\n⏰ Время по умолчанию: {settings['default_reminder_time']}\n"
             f"⏱️ Напоминать заранее: {settings['default_remind_before']} мин\n"
+            f"🌙 Вечернее уведомление: {settings['evening_report_time']}\n"
             f"📋 В это время бот также присылает план на сегодня.",
             reply_markup=create_settings_keyboard())
 
@@ -2258,6 +2284,28 @@ def callback_handler(call):
         bot.send_message(user_id, "📅 Выбери новую дату:", reply_markup=create_calendar_keyboard(user_id))
         safe_answer_callback(call); return
 
+    elif data.startswith('snooze_'):
+        task_id = int(data.replace('snooze_', ''))
+        conn = sqlite3.connect('tasks.db')
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT is_done FROM tasks WHERE id=? AND user_id=?",
+            (task_id, user_id)
+        )
+        row = cursor.fetchone()
+        if not row or row[0]:
+            conn.close()
+            safe_answer_callback(call, "Это дело уже выполнено или не найдено")
+            return
+        snoozed_until = (get_current_time() + datetime.timedelta(minutes=10)).strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute(
+            "UPDATE tasks SET snoozed_until=?, exact_reminder_sent=0 WHERE id=? AND user_id=?",
+            (snoozed_until, task_id, user_id)
+        )
+        conn.commit()
+        conn.close()
+        safe_answer_callback(call, "⏰ Напомню через 10 минут")
+
     elif data.startswith('done_'):
         task_id = int(data.replace('done_', ''))
         mark_task_done(task_id, user_id)
@@ -2335,6 +2383,44 @@ def callback_handler(call):
             reply_markup=create_default_before_keyboard(user_id)
         )
         safe_answer_callback(call)
+
+    elif data == 'setting_evening_time':
+        bot.edit_message_text(
+            "🌙 Выбери время вечернего уведомления:",
+            user_id,
+            msg_id,
+            reply_markup=create_evening_time_keyboard(user_id)
+        )
+        safe_answer_callback(call)
+
+    elif data.startswith('etime_'):
+        if data == 'etime_back_settings':
+            settings = get_user_settings(user_id)
+            bot.edit_message_text(
+                f"⚙️ Твои настройки:\n"
+                f"⏰ Время по умолчанию: {settings['default_reminder_time']}\n"
+                f"⏱️ Напоминать заранее: {settings['default_remind_before']} мин\n"
+                f"🌙 Вечернее уведомление: {settings['evening_report_time']}",
+                user_id,
+                msg_id,
+                reply_markup=create_settings_keyboard()
+            )
+            safe_answer_callback(call)
+            return
+
+        time_val = data.replace('etime_', '')
+        update_user_setting(user_id, 'evening_report_time', time_val)
+        settings = get_user_settings(user_id)
+        bot.edit_message_text(
+            f"⚙️ Твои настройки:\n"
+            f"⏰ Время по умолчанию: {settings['default_reminder_time']}\n"
+            f"⏱️ Напоминать заранее: {settings['default_remind_before']} мин\n"
+            f"🌙 Вечернее уведомление: {settings['evening_report_time']}",
+            user_id,
+            msg_id,
+            reply_markup=create_settings_keyboard()
+        )
+        safe_answer_callback(call, f"🌙 Вечернее уведомление: {time_val}")
 
     elif data == 'setting_recurring':
         bot.edit_message_text(
