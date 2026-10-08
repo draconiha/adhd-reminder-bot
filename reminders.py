@@ -65,6 +65,7 @@ def check_reminders(bot, logger):
                         continue
 
                     # Предварительное напоминание: ровно один раз.
+                    if remind_before > 0 and not advance_sent:
                         advance_at = scheduled - datetime.timedelta(minutes=remind_before)
                         if now >= advance_at and now < scheduled:
                             if remind_before < 60:
