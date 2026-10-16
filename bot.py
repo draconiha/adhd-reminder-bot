@@ -2286,25 +2286,45 @@ def callback_handler(call):
 
     elif data.startswith('snooze_'):
         task_id = int(data.replace('snooze_', ''))
-        conn = sqlite3.connect('tasks.db')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT is_done FROM tasks WHERE id=? AND user_id=?",
-            (task_id, user_id)
-        )
-        row = cursor.fetchone()
-        if not row or row[0]:
-            conn.close()
-            safe_answer_callback(call, "Это дело уже выполнено или не найдено")
-            return
-        snoozed_until = (get_current_time() + datetime.timedelta(minutes=10)).strftime('%Y-%m-%d %H:%M:%S')
-        cursor.execute(
-            "UPDATE tasks SET snoozed_until=?, exact_reminder_sent=0 WHERE id=? AND user_id=?",
-            (snoozed_until, task_id, user_id)
-        )
-        conn.commit()
-        conn.close()
-        safe_answer_callback(call, "⏰ Напомню через 10 минут")
+        conn = None
+        try:
+            conn = sqlite3.connect('tasks.db')
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT is_done FROM tasks WHERE id=? AND user_id=?",
+                (task_id, user_id)
+            )
+            row = cursor.fetchone()
+            if not row or row[0]:
+                bot.send_message(user_id, "Это дело уже выполнено или не найдено.")
+                return
+
+            snoozed_until = (
+                get_current_time() + datetime.timedelta(minutes=10)
+            ).strftime('%Y-%m-%d %H:%M:%S')
+            cursor.execute(
+                "UPDATE tasks SET snoozed_until=?, exact_reminder_sent=0 WHERE id=? AND user_id=?",
+                (snoozed_until, task_id, user_id)
+            )
+            conn.commit()
+
+            if cursor.rowcount != 1:
+                bot.send_message(user_id, "Не получилось отложить напоминание. Попробуй ещё раз.")
+                logger.error(f"Snooze update affected {cursor.rowcount} rows for task_id={task_id}, user_id={user_id}")
+                return
+
+            bot.send_message(user_id, "⏰ Хорошо! Напомню об этом деле через 10 минут.")
+            logger.info(f"Task snoozed for 10 minutes: task_id={task_id}, user_id={user_id}, until={snoozed_until}")
+        except Exception:
+            logger.exception(f"Failed to snooze task_id={task_id}, user_id={user_id}")
+            try:
+                bot.send_message(user_id, "Не получилось отложить напоминание. Ошибка записана в журнал.")
+            except Exception:
+                logger.exception("Could not send snooze error message")
+        finally:
+            if conn is not None:
+                conn.close()
+        return
 
     elif data.startswith('done_'):
         task_id = int(data.replace('done_', ''))
